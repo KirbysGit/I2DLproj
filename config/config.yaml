@@ -1,0 +1,48 @@
+# SKU-110K Dataset Configuration
+dataset:
+  path: "datasets/SKU-110K"          # Root directory of the dataset
+  train_path: "images/train"         # Path to training images
+  val_path: "images/val"             # Path to validation images
+  test_path: "images/test"           # Path to test images
+  annotations_path: "annotations"     # Path to annotation files
+  
+  # Add test mode settings
+  test_mode: true                    # Enable test mode with minimal data
+  test_samples: 5                    # Number of test samples to use
+
+# Data Processing Parameters
+preprocessing:
+  image_size: [640, 640]          # Input image dimensions [height, width]
+  batch_size: 16                   # Number of images per batch
+  num_workers: 4                   # Number of parallel data loading workers
+
+# Model Architecture Configuration
+model:
+  backbone: "resnet50"            # CNN backbone architecture
+  vit:
+    patch_size: 16                # Size of image patches for ViT
+    num_heads: 8                  # Number of attention heads
+    mlp_dim: 2048                # Dimension of MLP layer in transformer
+    num_layers: 6                # Number of transformer layers
+    hidden_dim: 768              # Dimension of transformer features
+    dropout: 0.1                 # Dropout rate for regularization
+
+# Training Configuration
+training:
+  epochs: 100                     # Total number of training epochs
+  learning_rate: 0.001           # Initial learning rate
+  weight_decay: 0.0001           # L2 regularization factor
+  warmup_epochs: 5               # Number of warmup epochs
+  optimizer: "adamw"             # Optimizer type
+  mixed_precision: true          # Whether to use mixed precision training
+  save_dir: "models"             # Directory to save model checkpoints
+
+# Evaluation Parameters
+evaluation:
+  conf_threshold: 0.5            # Confidence threshold for object detection
+  iou_threshold: 0.5             # IoU threshold for matching predictions with ground truth
+  
+# Logging Configuration
+logging:
+  log_dir: "results/logs"        # Directory for tensorboard logs
+  save_frequency: 5              # Epoch interval for saving checkpoints 

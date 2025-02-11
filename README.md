@@ -1,1 +1,3 @@
-"# I2DLproj" 
+# Dataset Setup
+
+## Directory Structure

@@ -1,0 +1,85 @@
+# Datasets
+datasets/
+data/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.tif
+*.csv
+
+# Model weights and checkpoints
+models/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.weights
+
+# Results and logs
+results/
+logs/
+wandb/
+tensorboard/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+retail_analysis_env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Test data (generated during testing)
+test_*.jpg
+test_*.png
+test_*.json
+
+# Temporary files
+tmp/
+temp/
+*.tmp 

@@ -1,0 +1,23 @@
+# Deep Learning Frameworks
+torch>=1.10.0
+torchvision>=0.11.0
+tensorflow>=2.8.0  # Optional if we're only using PyTorch
+
+# Data Processing
+numpy>=1.21.0
+pandas>=1.3.0
+Pillow>=8.0.0  # Required for image processing
+albumentations>=1.0.0  # For data augmentation
+
+# Visualization and Utilities
+matplotlib>=3.4.0
+opencv-python>=4.5.0
+tqdm>=4.62.0  # For progress bars
+
+# Development Tools
+jupyter>=1.0.0
+pyyaml>=5.4.0  # For config files
+
+# Optional - for extended functionality
+scikit-learn>=0.24.0
+einops>=0.3.0  # For tensor operations in ViT 
