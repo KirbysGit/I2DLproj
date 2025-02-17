@@ -7,14 +7,21 @@ dataset:
   annotations_path: "annotations"     # Path to annotation files
   
   # Add test mode settings
-  test_mode: true                    # Enable test mode with minimal data
+  test_mode: false                  # Enable test mode with minimal data
   test_samples: 5                    # Number of test samples to use
+
+# Add development mode settings
+dev_mode: true
+dev_samples: {
+  'train': 100,  # Use 100 training images
+  'val': 20      # Use 20 validation images
+}
 
 # Data Processing Parameters
 preprocessing:
   image_size: [640, 640]          # Input image dimensions [height, width]
-  batch_size: 16                   # Number of images per batch
-  num_workers: 4                   # Number of parallel data loading workers
+  batch_size: 4                   # Smaller batch size
+  num_workers: 1                 # Fewer workers
 
 # Model Architecture Configuration
 model:
@@ -30,12 +37,28 @@ model:
 # Training Configuration
 training:
   epochs: 100                     # Total number of training epochs
-  learning_rate: 0.001           # Initial learning rate
-  weight_decay: 0.0001           # L2 regularization factor
+  learning_rate: 0.0005          # Initial learning rate
+  weight_decay: 0.00001           # L2 regularization factor
   warmup_epochs: 5               # Number of warmup epochs
   optimizer: "adamw"             # Optimizer type
   mixed_precision: true          # Whether to use mixed precision training
   save_dir: "models"             # Directory to save model checkpoints
+  
+  # Incremental training settings
+  resume_from_checkpoint: true    # Whether to resume from checkpoint
+  max_epochs: 100                 # Total epochs to train
+  epochs_per_stage: 5             # Epochs to train before validation
+  early_stopping_patience: 5      # Epochs to wait before early stopping
+  
+  # Learning rate scheduling
+  lr_schedule:
+    initial_lr: 0.001
+    min_lr: 0.00001
+    patience: 3                   # Epochs before reducing LR
+    reduction_factor: 0.5        # Factor to reduce LR by
+    
+  # Validation settings
+  validation_frequency: 1         # Epochs between validations
 
 # Evaluation Parameters
 evaluation:
@@ -45,4 +68,15 @@ evaluation:
 # Logging Configuration
 logging:
   log_dir: "results/logs"        # Directory for tensorboard logs
-  save_frequency: 5              # Epoch interval for saving checkpoints 
+  save_frequency: 5              # Epoch interval for saving checkpoints
+  checkpoint_frequency: 5         # Epochs between checkpoints
+  save_optimizer_state: true     # Whether to save optimizer state
+  visualization:
+    enabled: true
+    batch_frequency: 100    # Reduced frequency to avoid too many plots
+    save_plots: true      # Save metric plots 
+
+# Add error handling settings
+skip_missing_images: true
+report_missing: true
+min_valid_images: 100  # Minimum number of valid images required 

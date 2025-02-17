@@ -16,27 +16,27 @@ from .model import CNNViTHybrid
 from .trainer import Trainer
 from .utils import load_config, custom_collate_fn
 
-def main():
-    print("\n=== Starting Retail Product Detection Training ===\n")
+def main(config=None):
+    if config is None:
+        config = load_config('config/config.yaml')
     
-    # Load configuration
-    config = load_config('config/config.yaml')
-    print("Configuration loaded successfully")
-    
-    # Create datasets
-    print("\nInitializing datasets:")
+    # Create and verify datasets
     train_dataset = SKU110KDataset(config, split='train')
     val_dataset = SKU110KDataset(config, split='val')
     
-    # Create dataloaders with optimized settings
-    print("\nCreating data loaders...")
+    print(f"\nDataset sizes:")
+    print(f"Train: {len(train_dataset)} images")
+    print(f"Val: {len(val_dataset)} images")
+    
+    if len(train_dataset) == 0 or len(val_dataset) == 0:
+        raise ValueError("Empty datasets!")
+    
+    # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['preprocessing']['batch_size'],
         shuffle=True,
-        num_workers=min(4, os.cpu_count()),  # Optimize worker count
-        pin_memory=True,  # Speed up CPU to GPU transfer
-        persistent_workers=True,  # Keep workers alive between epochs
+        num_workers=1,  # Reduced for testing
         collate_fn=custom_collate_fn
     )
     
@@ -44,30 +44,19 @@ def main():
         val_dataset,
         batch_size=config['preprocessing']['batch_size'],
         shuffle=False,
-        num_workers=config['preprocessing']['num_workers'],
+        num_workers=1,
         collate_fn=custom_collate_fn
     )
-    print("Data loaders created successfully")
     
-    # Initialize model with GPU support
+    # Initialize model and trainer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if torch.cuda.is_available():
-        print(f"\nUsing GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        print("\nUsing CPU - training will be slower")
-    
     model = CNNViTHybrid(config).to(device)
-    
-    # Enable GPU optimization if available
-    if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
-    
-    # Create trainer
     trainer = Trainer(model, config)
     
-    # Start training
-    print("\nStarting training...\n")
-    trainer.train(train_loader, val_loader)
+    # Run training
+    metrics = trainer.train(train_loader, val_loader)
+    
+    return metrics
 
 if __name__ == '__main__':
     main() 

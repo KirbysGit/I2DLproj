@@ -2,6 +2,79 @@ import yaml
 import torch
 import numpy as np
 from pathlib import Path
+from colorama import init, Fore, Style
+import logging
+from datetime import datetime
+
+# Initialize colorama for Windows support
+init()
+
+class ColorLogger:
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self, log_dir='results/logs'):
+        if not hasattr(self, 'initialized'):
+            self.initialized = True
+            self.setup_logger(log_dir)
+    
+    def setup_logger(self, log_dir):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create file handler
+        log_file = self.log_dir / f'training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)  # Set file logging to DEBUG level
+        
+        # Create console handler with colors
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)  # Set console to INFO level
+        
+        # Create formatters and add them to the handlers
+        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        
+        # Setup logger
+        self.logger = logging.getLogger('TrainingLogger')
+        self.logger.setLevel(logging.DEBUG)  # Set root logger to DEBUG
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+
+    def debug(self, msg):
+        """Log debug message (only to file)"""
+        self.logger.debug(msg)
+
+    def info(self, msg, color=None):
+        """Log info message with optional color"""
+        colored_msg = f"{color}{msg}{Style.RESET_ALL}" if color else msg
+        self.logger.info(msg)  # Log original message to file
+        if color:  # Print colored message to console
+            print(colored_msg)
+        else:
+            print(msg)
+
+    def warning(self, msg):
+        """Log warning message in yellow"""
+        colored_msg = f"{Fore.YELLOW}WARNING: {msg}{Style.RESET_ALL}"
+        self.logger.warning(msg)
+        print(colored_msg)
+
+    def error(self, msg):
+        """Log error message in red"""
+        colored_msg = f"{Fore.RED}ERROR: {msg}{Style.RESET_ALL}"
+        self.logger.error(msg)
+        print(colored_msg)
+
+    def success(self, msg):
+        """Log success message in green"""
+        colored_msg = f"{Fore.GREEN}{msg}{Style.RESET_ALL}"
+        self.logger.info(msg)
+        print(colored_msg)
 
 def load_config(config_path):
     """
@@ -92,50 +165,27 @@ def load_checkpoint(model, optimizer, path):
     return checkpoint['epoch']
 
 def custom_collate_fn(batch):
-    """Custom collate function with data verification"""
-    # Verify data shapes
-    for i, sample in enumerate(batch):
-        if sample['image'].ndim != 3:
-            raise ValueError(f"Image {i} has wrong dimensions: {sample['image'].shape}")
-        if sample['boxes'].ndim != 2:
-            raise ValueError(f"Boxes {i} has wrong dimensions: {sample['boxes'].shape}")
-    
-    # Get max number of boxes in this batch
-    max_boxes = max(len(sample['boxes']) for sample in batch)
-    
-    # Initialize lists for batch items
+    """Collate function for DataLoader"""
     images = []
     boxes = []
     labels = []
     obj_targets = []
     box_targets = []
-    image_names = []
     
     for sample in batch:
-        images.append(torch.from_numpy(sample['image']))
-        
-        # Pad boxes and labels if necessary
-        num_boxes = len(sample['boxes'])
-        if num_boxes < max_boxes:
-            # Pad boxes with zeros
-            padded_boxes = np.zeros((max_boxes, 4), dtype=np.float32)
-            padded_boxes[:num_boxes] = sample['boxes']
-            padded_labels = np.zeros(max_boxes, dtype=np.int64)
-            padded_labels[:num_boxes] = sample['labels']
+        # Handle image that's already a tensor
+        if isinstance(sample['image'], torch.Tensor):
+            images.append(sample['image'])
         else:
-            padded_boxes = sample['boxes']
-            padded_labels = sample['labels']
+            images.append(torch.from_numpy(sample['image']))
         
-        boxes.append(torch.from_numpy(padded_boxes))
-        labels.append(torch.from_numpy(padded_labels))
+        boxes.append(sample['boxes'])
+        labels.append(sample['labels'])
         obj_targets.append(sample['obj_targets'])
         box_targets.append(sample['box_targets'])
-        image_names.append(sample['image_name'])
     
     # Stack all tensors
     images = torch.stack(images)
-    boxes = torch.stack(boxes)
-    labels = torch.stack(labels)
     obj_targets = torch.stack(obj_targets)
     box_targets = torch.stack(box_targets)
     
@@ -144,7 +194,5 @@ def custom_collate_fn(batch):
         'boxes': boxes,
         'labels': labels,
         'obj_targets': obj_targets,
-        'box_targets': box_targets,
-        'image_names': image_names,
-        'num_boxes': torch.tensor([len(sample['boxes']) for sample in batch])  # Store original box counts
+        'box_targets': box_targets
     }
