@@ -59,32 +59,46 @@ class CNNViTHybrid(nn.Module):
         super().__init__()
         self.config = config
         
-        # Initialize backbone with pretrained=False initially
-        self.backbone = models.resnet50(pretrained=False)
+        # Load ResNet but remove the final layers
+        backbone = models.resnet50(pretrained=False)
+        self.backbone = nn.Sequential(
+            *list(backbone.children())[:-2]  # Remove avg pool and fc layers
+        )
         
         # Try to load weights locally if available
         weights_path = 'models/resnet50_weights.pth'
         if os.path.exists(weights_path):
             self.backbone.load_state_dict(torch.load(weights_path))
         else:
-            # Fall back to pretrained=True if we have internet
             try:
-                self.backbone = models.resnet50(pretrained=True)
+                # Load pretrained weights
+                pretrained = models.resnet50(pretrained=True)
+                # Remove the last two layers from pretrained weights
+                pretrained_dict = {k: v for k, v in pretrained.state_dict().items() 
+                                 if not k.startswith('fc.') and not k.startswith('avgpool.')}
+                self.backbone.load_state_dict(pretrained_dict, strict=False)
             except:
                 print("Warning: Could not load pretrained weights. Using random initialization.")
         
+        # Calculate feature map size after ResNet
+        # Input: 640x640 -> After ResNet: 20x20 (32x downsampling)
+        self.feature_size = 640 // 32  # = 20
+        
         # Configure Vision Transformer components
         vit_config = config['model']['vit']
-        self.patch_size = vit_config['patch_size']      # Size of image patches
-        self.hidden_dim = vit_config['hidden_dim']      # Transformer hidden dimension
-        self.num_layers = vit_config['num_layers']      # Number of transformer layers
+        self.patch_size = vit_config['patch_size']
+        self.hidden_dim = vit_config['hidden_dim']
+        self.num_layers = vit_config['num_layers']
         
         # 1x1 convolution to project CNN features to transformer dimension
         self.projection = nn.Conv2d(2048, self.hidden_dim, kernel_size=1)
         
+        # Calculate number of patches
+        num_patches = (self.feature_size ** 2)  # 20x20 = 400 patches
+        
         # Learnable position embeddings for transformer
         self.pos_embedding = nn.Parameter(
-            torch.randn(1, (640//self.patch_size)**2, self.hidden_dim)
+            torch.randn(1, num_patches, self.hidden_dim)
         )
         
         # Stack of transformer blocks
@@ -100,28 +114,27 @@ class CNNViTHybrid(nn.Module):
         )
 
     def forward(self, x):
-        # Extract features using CNN backbone
-        batch_size = x.shape[0]
-        cnn_features = self.backbone(x)
+        # Extract features using CNN backbone (now outputs proper feature maps)
+        features = self.backbone(x)  # Shape: [B, 2048, 20, 20]
         
-        # Project CNN features to transformer dimension
-        projected = self.projection(cnn_features)
+        # Project features to transformer dimension
+        projected = self.projection(features)  # Shape: [B, hidden_dim, 20, 20]
         
-        # Reshape features into sequence of patches
+        # Reshape to sequence of patches
         patches = rearrange(projected, 'b c h w -> b (h w) c')
         
-        # Add positional embeddings to provide spatial information
+        # Add positional embeddings (now matches in size)
         patches = patches + self.pos_embedding
         
         # Pass through transformer blocks
         for block in self.transformer_blocks:
             patches = block(patches)
         
-        # Apply detection head to each patch
+        # Apply detection head
         detections = self.detection_head(patches)
         
-        # Reshape output to spatial grid format
+        # Reshape output to spatial grid format using stored feature_size
         output = rearrange(detections, 'b (h w) c -> b h w c', 
-                          h=640//self.patch_size, w=640//self.patch_size)
+                          h=self.feature_size, w=self.feature_size)
         
         return output

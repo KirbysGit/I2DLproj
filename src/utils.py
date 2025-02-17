@@ -90,3 +90,61 @@ def load_checkpoint(model, optimizer, path):
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return checkpoint['epoch']
+
+def custom_collate_fn(batch):
+    """Custom collate function with data verification"""
+    # Verify data shapes
+    for i, sample in enumerate(batch):
+        if sample['image'].ndim != 3:
+            raise ValueError(f"Image {i} has wrong dimensions: {sample['image'].shape}")
+        if sample['boxes'].ndim != 2:
+            raise ValueError(f"Boxes {i} has wrong dimensions: {sample['boxes'].shape}")
+    
+    # Get max number of boxes in this batch
+    max_boxes = max(len(sample['boxes']) for sample in batch)
+    
+    # Initialize lists for batch items
+    images = []
+    boxes = []
+    labels = []
+    obj_targets = []
+    box_targets = []
+    image_names = []
+    
+    for sample in batch:
+        images.append(torch.from_numpy(sample['image']))
+        
+        # Pad boxes and labels if necessary
+        num_boxes = len(sample['boxes'])
+        if num_boxes < max_boxes:
+            # Pad boxes with zeros
+            padded_boxes = np.zeros((max_boxes, 4), dtype=np.float32)
+            padded_boxes[:num_boxes] = sample['boxes']
+            padded_labels = np.zeros(max_boxes, dtype=np.int64)
+            padded_labels[:num_boxes] = sample['labels']
+        else:
+            padded_boxes = sample['boxes']
+            padded_labels = sample['labels']
+        
+        boxes.append(torch.from_numpy(padded_boxes))
+        labels.append(torch.from_numpy(padded_labels))
+        obj_targets.append(sample['obj_targets'])
+        box_targets.append(sample['box_targets'])
+        image_names.append(sample['image_name'])
+    
+    # Stack all tensors
+    images = torch.stack(images)
+    boxes = torch.stack(boxes)
+    labels = torch.stack(labels)
+    obj_targets = torch.stack(obj_targets)
+    box_targets = torch.stack(box_targets)
+    
+    return {
+        'image': images,
+        'boxes': boxes,
+        'labels': labels,
+        'obj_targets': obj_targets,
+        'box_targets': box_targets,
+        'image_names': image_names,
+        'num_boxes': torch.tensor([len(sample['boxes']) for sample in batch])  # Store original box counts
+    }

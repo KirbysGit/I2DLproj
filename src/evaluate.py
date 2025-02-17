@@ -88,6 +88,16 @@ def calculate_metrics(predictions, targets, config):
         'f1_score': f1_score
     }
 
+def calculate_map(predictions, targets, iou_threshold=0.5):
+    """Calculate mean Average Precision"""
+    # Implementation of mAP calculation
+    pass
+
+def calculate_recall(predictions, targets, iou_threshold=0.5):
+    """Calculate Recall at specific IoU threshold"""
+    # Implementation of recall calculation
+    pass
+
 def main():
     """
     Main evaluation script to test model performance on test set

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 import albumentations as A
+import torch
 
 class SKU110KDataset(Dataset):
     """
@@ -21,46 +22,49 @@ class SKU110KDataset(Dataset):
         """
         self.config = config
         self.split = split
-        # Use custom transforms if provided, else use default transforms
         self.transform = transform or self._get_default_transforms()
         
-        # Setup dataset paths
+        print(f"\nInitializing {split} dataset:")
+        
+        # Setup paths
         self.dataset_path = config['dataset']['path']
         self.images_path = os.path.join(self.dataset_path, f"images/{split}")
+        print(f"- Image path: {self.images_path}")
         
-        # For testing, create dummy data
+        # For testing, create dummy data first
         if config.get('dataset', {}).get('test_mode', False):
+            print("- Creating test data...")
             self._create_test_data()
-            
-        # Load annotations
-        annotations_file = os.path.join(
-            self.dataset_path,
-            'annotations',
-            f'annotations_{split}.csv'
-        )
-        
-        if os.path.exists(annotations_file):
-            self.annotations = pd.read_csv(annotations_file)
-        else:
-            # Create dummy annotations for testing
             self._create_test_annotations()
-            
-        # Group annotations by image for efficient retrieval
+            print(f"- Created {config['dataset'].get('test_samples', 5)} test samples")
+        else:
+            # Load annotations
+            annotations_file = os.path.join(
+                self.dataset_path,
+                'annotations',
+                f'annotations_{split}.csv'
+            )
+            if os.path.exists(annotations_file):
+                self.annotations = pd.read_csv(annotations_file)
+                print(f"- Loaded {len(self.annotations)} annotations")
+            else:
+                print("- No annotations found, creating test data")
+                self._create_test_annotations()
+        
+        # Group annotations
         self.image_groups = self.annotations.groupby('image_name')
         self.image_names = list(self.image_groups.groups.keys())
+        print(f"- Total images: {len(self.image_names)}")
+
+        # Add caching for transformed images
+        self.cache = {}
+        self.cache_size = config.get('dataset', {}).get('cache_size', 100)
 
     def _get_default_transforms(self):
-        """
-        Default augmentation pipeline using Albumentations library
-        Includes:
-        - Resize to standard input size
-        - Normalize using ImageNet statistics
-        """
+        """Optimized transform pipeline"""
         return A.Compose([
-            # Resize images to model's expected input size
             A.Resize(height=self.config['preprocessing']['image_size'][0],
                     width=self.config['preprocessing']['image_size'][1]),
-            # Normalize using ImageNet mean and std
             A.Normalize(mean=[0.485, 0.456, 0.406],
                        std=[0.229, 0.224, 0.225]),
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_labels']))
@@ -95,7 +99,8 @@ class SKU110KDataset(Dataset):
                     'x_min': x1,
                     'y_min': y1,
                     'x_max': x2,
-                    'y_max': y2
+                    'y_max': y2,
+                    'class': 0
                 })
         
         self.annotations = pd.DataFrame(annotations)
@@ -105,15 +110,10 @@ class SKU110KDataset(Dataset):
         return len(self.image_names)
 
     def __getitem__(self, idx):
-        """
-        Get a single sample from the dataset
-        Returns:
-            dict containing:
-            - image: preprocessed image tensor
-            - boxes: bounding box coordinates
-            - labels: object class labels (all 0 for SKU-110K)
-            - image_name: original image filename
-        """
+        """Get a single sample from the dataset with caching"""
+        if idx in self.cache:
+            return self.cache[idx]
+        
         # Get image name and its annotations
         image_name = self.image_names[idx]
         image_anns = self.image_groups.get_group(image_name)
@@ -125,23 +125,61 @@ class SKU110KDataset(Dataset):
         
         # Extract bounding box coordinates
         boxes = image_anns[['x_min', 'y_min', 'x_max', 'y_max']].values
-        # All objects are same class (retail products) in SKU-110K
         labels = np.zeros(len(boxes))
         
-        # Apply transforms to both image and bounding boxes
+        # Apply transforms
         if self.transform:
             transformed = self.transform(
                 image=image,
                 bboxes=boxes,
                 class_labels=labels
             )
-            image = transformed['image']
+            image = transformed['image']  # This is now in HWC format
             boxes = transformed['bboxes']
             labels = transformed['class_labels']
         
-        return {
-            'image': image,
+        # Convert to CHW format (what PyTorch expects)
+        image = np.transpose(image, (2, 0, 1))
+        
+        # Process boxes into grid format
+        obj_targets, box_targets = self.process_ground_truth(
+            boxes, 
+            image_size=self.config['preprocessing']['image_size']
+        )
+        
+        result = {
+            'image': image,  # Now in CHW format
             'boxes': np.array(boxes, dtype=np.float32),
             'labels': np.array(labels, dtype=np.int64),
-            'image_name': image_name
+            'image_name': image_name,
+            'obj_targets': obj_targets,
+            'box_targets': box_targets
         }
+        
+        # Cache the result
+        if len(self.cache) < self.cache_size:
+            self.cache[idx] = result
+        
+        return result
+
+    def process_ground_truth(self, boxes, image_size=(640, 640)):
+        """Convert ground truth boxes to grid format"""
+        grid_size = (20, 20)  # Based on our model's output
+        grid_h, grid_w = grid_size
+        
+        # Initialize target tensors
+        obj_targets = torch.zeros(grid_h, grid_w)
+        box_targets = torch.zeros(grid_h, grid_w, 4)
+        
+        # Convert boxes to grid cells
+        for box in boxes:
+            x1, y1, x2, y2 = box
+            # Convert to grid coordinates
+            grid_x = int((x1 + x2) / 2 * grid_w / image_size[1])
+            grid_y = int((y1 + y2) / 2 * grid_h / image_size[0])
+            
+            if 0 <= grid_x < grid_w and 0 <= grid_y < grid_h:
+                obj_targets[grid_y, grid_x] = 1
+                box_targets[grid_y, grid_x] = torch.tensor([x1, y1, x2, y2])
+        
+        return obj_targets, box_targets

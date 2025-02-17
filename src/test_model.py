@@ -1,7 +1,7 @@
 import torch
-from dataset_loader import SKU110KDataset
-from model import CNNViTHybrid
-from utils import load_config
+from .dataset_loader import SKU110KDataset
+from .model import CNNViTHybrid
+from .utils import load_config
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
@@ -32,8 +32,12 @@ def test_dataset():
     image = sample['image']
     boxes = sample['boxes']
     
+    # Convert image for visualization (handle both CHW and HWC formats)
+    if image.shape[0] == 3:  # If in CHW format
+        image = image.transpose(1, 2, 0)
+    
     plt.figure(figsize=(12, 8))
-    plt.imshow(image.transpose(1, 2, 0))  # Convert from CHW to HWC format
+    plt.imshow(image)  # Matplotlib expects HWC format
     
     # Draw bounding boxes
     for box in boxes:
@@ -77,19 +81,29 @@ def main():
     """
     Run all tests
     """
-    # Create results directory if it doesn't exist
+    # Create required directories if they don't exist
     import os
     os.makedirs('results', exist_ok=True)
+    os.makedirs('datasets/SKU-110K/images/train', exist_ok=True)
+    os.makedirs('datasets/SKU-110K/images/val', exist_ok=True)
+    os.makedirs('datasets/SKU-110K/images/test', exist_ok=True)
+    os.makedirs('datasets/SKU-110K/annotations', exist_ok=True)
     
     try:
         test_dataset()
     except Exception as e:
         print(f"Dataset test failed: {str(e)}")
+        print(f"Error details: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
     
     try:
         test_model()
     except Exception as e:
         print(f"Model test failed: {str(e)}")
+        print(f"Error details: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == '__main__':
     main() 
