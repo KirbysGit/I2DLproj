@@ -12,49 +12,45 @@ warnings.filterwarnings('ignore', category=UserWarning)
 import torch
 from torch.utils.data import DataLoader
 from .dataset_loader import SKU110KDataset
-from .model import CNNViTHybrid
+from .model import SimpleDetector
 from .trainer import Trainer
 from .utils import load_config, custom_collate_fn
+from .early_stopping import EarlyStopping
 
-def main(config=None):
-    if config is None:
-        config = load_config('config/config.yaml')
+def main(config):
+    # Create model
+    model = SimpleDetector()  # Using simpler model first
     
-    # Create and verify datasets
+    # Create datasets
     train_dataset = SKU110KDataset(config, split='train')
     val_dataset = SKU110KDataset(config, split='val')
     
-    print(f"\nDataset sizes:")
-    print(f"Train: {len(train_dataset)} images")
-    print(f"Val: {len(val_dataset)} images")
-    
-    if len(train_dataset) == 0 or len(val_dataset) == 0:
-        raise ValueError("Empty datasets!")
-    
-    # Create dataloaders
+    # Create data loaders
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=config['preprocessing']['batch_size'],
+        train_dataset, 
+        batch_size=config['training']['batch_size'],
         shuffle=True,
-        num_workers=1,  # Reduced for testing
+        num_workers=4,
         collate_fn=custom_collate_fn
     )
     
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config['preprocessing']['batch_size'],
+        batch_size=config['training']['batch_size'],
         shuffle=False,
-        num_workers=1,
+        num_workers=4,
         collate_fn=custom_collate_fn
     )
     
-    # Initialize model and trainer
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = CNNViTHybrid(config).to(device)
-    trainer = Trainer(model, config)
+    # Add early stopping
+    early_stopper = EarlyStopping(
+        patience=5,
+        min_delta=0.01,
+        mode='max'
+    )
     
-    # Run training
-    metrics = trainer.train(train_loader, val_loader)
+    trainer = Trainer(model, config)
+    metrics = trainer.train(train_loader, val_loader, early_stopper)
     
     return metrics
 

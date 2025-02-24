@@ -7,7 +7,7 @@ tensorflow>=2.8.0  # Optional if we're only using PyTorch
 numpy>=1.21.0
 pandas>=1.3.0
 Pillow>=8.0.0  # Required for image processing
-albumentations>=1.0.0  # For data augmentation
+albumentations==1.3.1  # Specify exact version
 
 # Visualization and Utilities
 matplotlib>=3.4.0

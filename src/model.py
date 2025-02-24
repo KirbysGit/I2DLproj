@@ -90,8 +90,13 @@ class CNNViTHybrid(nn.Module):
         self.hidden_dim = vit_config['hidden_dim']
         self.num_layers = vit_config['num_layers']
         
-        # 1x1 convolution to project CNN features to transformer dimension
-        self.projection = nn.Conv2d(2048, self.hidden_dim, kernel_size=1)
+        # Improved projection with residual connection
+        self.projection = nn.Sequential(
+            nn.Conv2d(2048, self.hidden_dim, kernel_size=1),
+            nn.BatchNorm2d(self.hidden_dim),
+            nn.ReLU(),
+            nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=1)
+        )
         
         # Calculate number of patches
         num_patches = (self.feature_size ** 2)  # 20x20 = 400 patches
@@ -106,19 +111,22 @@ class CNNViTHybrid(nn.Module):
             ViTBlock(config) for _ in range(self.num_layers)
         ])
         
-        # Detection head: predicts bounding box coordinates and objectness score
+        # Improved detection head
         self.detection_head = nn.Sequential(
+            nn.LayerNorm(self.hidden_dim),
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.ReLU(),
-            nn.Linear(self.hidden_dim, 5)  # [x1, y1, x2, y2, objectness]
+            nn.Dropout(0.1),
+            nn.Linear(self.hidden_dim, 5)
         )
 
     def forward(self, x):
         # Extract features using CNN backbone (now outputs proper feature maps)
         features = self.backbone(x)  # Shape: [B, 2048, 20, 20]
         
-        # Project features to transformer dimension
-        projected = self.projection(features)  # Shape: [B, hidden_dim, 20, 20]
+        # Add residual connection
+        projected = self.projection(features)
+        projected = projected + features[:, :self.hidden_dim]  # Residual if dims match
         
         # Reshape to sequence of patches
         patches = rearrange(projected, 'b c h w -> b (h w) c')
@@ -137,4 +145,44 @@ class CNNViTHybrid(nn.Module):
         output = rearrange(detections, 'b (h w) c -> b h w c', 
                           h=self.feature_size, w=self.feature_size)
         
-        return output
+        # Normalize box coordinates to [0,1]
+        boxes = torch.sigmoid(output[..., :4])
+        obj_scores = output[..., 4]
+        
+        return torch.cat([boxes, obj_scores.unsqueeze(-1)], dim=-1)
+
+class SimpleDetector(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Simpler backbone
+        self.backbone = nn.Sequential(
+            nn.Conv2d(3, 64, 7, stride=2, padding=3),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.MaxPool2d(3, stride=2, padding=1),
+            
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(True),
+            
+            nn.Conv2d(128, 256, 3, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(True)
+        )
+        
+        # Simple detection head
+        self.head = nn.Sequential(
+            nn.Conv2d(256, 128, 1),
+            nn.ReLU(True),
+            nn.Conv2d(128, 5, 1)  # 4 box coords + 1 objectness
+        )
+    
+    def forward(self, x):
+        features = self.backbone(x)
+        output = self.head(features)
+        
+        # Split predictions
+        boxes = torch.sigmoid(output[..., :4])  # Force 0-1 range
+        scores = output[..., 4]  # Keep logits for BCE loss
+        
+        return torch.cat([boxes, scores.unsqueeze(-1)], dim=-1)

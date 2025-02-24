@@ -1,3 +1,44 @@
+# Object Detection Approach
+
+## Current Implementation
+
+### Model Architecture
+- SimpleDetector: A lightweight CNN-based detector
+  - Simplified backbone with 3 conv blocks
+  - Basic detection head
+  - Direct box coordinate and objectness prediction
+  - Sigmoid activation for box coordinates
+
+### Training Strategy
+1. **Initial Phase**
+   - Small dataset (20-50 images)
+   - Higher learning rate (1e-3)
+   - Aggressive box loss weight (50.0)
+   - Positive example weighting (10.0)
+
+2. **Loss Functions**
+   - Box Loss: MSE Loss with high weight
+   - Objectness Loss: BCE with logits and positive weighting
+   - Early stopping based on F1 score
+
+3. **Monitoring**
+   - Visualization of predictions
+   - Box coordinate ranges
+   - Objectness score distributions
+   - Loss component tracking
+
+### Development Workflow
+1. Start with simple model and small dataset
+2. Validate basic detection capability
+3. Add complexity gradually once working
+4. Use early stopping to quickly identify issues
+
+## Future Improvements
+1. Return to CNNViTHybrid once basic detection works
+2. Add feature pyramid network
+3. Implement multi-scale training
+4. Add data augmentation
+
 # RETAIL PRODUCT DETECTION PROJECT - CURRENT APPROACH
 
 ## 1. DATASET HANDLING

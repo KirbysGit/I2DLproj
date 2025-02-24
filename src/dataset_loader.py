@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 import albumentations as A
 import torch
 from pathlib import Path
+from .utils import ColorLogger
 
 class SKU110KDataset(Dataset):
     """
@@ -23,7 +24,10 @@ class SKU110KDataset(Dataset):
         """
         self.config = config
         self.split = split
-        self.transform = transform or self._get_default_transforms()
+        self.transform = transform or self._get_transforms()
+        
+        # Initialize logger
+        self.logger = ColorLogger()
         
         # Setup paths
         dataset_path = Path(config['dataset']['path'])
@@ -33,6 +37,9 @@ class SKU110KDataset(Dataset):
         # Load annotations
         print(f"\nInitializing {split} dataset:")
         print(f"- Image path: {self.image_dir}")
+        
+        # Add class mapping
+        self.class_to_idx = {'object': 0}  # Map class names to indices
         
         # Load annotations file with correct column names
         ann_file = annotations_path / f'annotations_{split}.csv'
@@ -56,6 +63,11 @@ class SKU110KDataset(Dataset):
             print("- First few rows:")
             print(self.annotations.head())
             print(f"- Loaded {len(self.annotations)} annotations")
+            
+            # Convert class strings to indices
+            self.annotations['class'] = self.annotations['class'].map(self.class_to_idx)
+            
+            print("- Classes mapped to indices:", self.class_to_idx)
             
             # Group by image
             self.image_groups = self.annotations.groupby('image_name')
@@ -118,15 +130,40 @@ class SKU110KDataset(Dataset):
         else:
             print("Image directory not found!")
             print(f"Expected path: {self.image_dir}")
+        
+        # Apply sample limits based on mode
+        if config['dataset'].get('custom_mode', False):
+            num_samples = config['dataset']['custom_samples'][split]
+            self.image_names = self.image_names[:num_samples]
+            print(f"Using {num_samples} images for {split} in custom mode")
 
-    def _get_default_transforms(self):
-        """Optimized transform pipeline"""
+    def _get_transforms(self):
+        """Get data augmentation transforms"""
         return A.Compose([
-            A.Resize(height=self.config['preprocessing']['image_size'][0],
-                    width=self.config['preprocessing']['image_size'][1]),
-            A.Normalize(mean=[0.485, 0.456, 0.406],
-                       std=[0.229, 0.224, 0.225]),
-        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_labels']))
+            # Use Resize instead of RandomResizedCrop
+            A.Resize(
+                height=640,
+                width=640,
+                always_apply=True
+            ),
+            # Add basic augmentations
+            A.OneOf([
+                A.RandomBrightnessContrast(p=1),
+                A.RandomGamma(p=1),
+                A.HorizontalFlip(p=1)
+            ], p=0.5),
+            # Always normalize
+            A.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+                always_apply=True
+            ),
+        ], bbox_params=A.BboxParams(
+            format='pascal_voc',
+            min_area=1024,  # Minimum box area
+            min_visibility=0.3,  # Minimum box visibility
+            label_fields=['class_labels']
+        ))
 
     def _create_test_data(self):
         """Create dummy data for testing"""
@@ -182,29 +219,31 @@ class SKU110KDataset(Dataset):
             image_path = self.image_dir / image_name
             image = cv2.imread(str(image_path))
             
-            if image is None:
-                print(f"Warning: Failed to load {image_path}")
+            if image is None or image.size == 0:
+                print(f"Skipping corrupted image: {image_path}")
                 return self.__getitem__((idx + 1) % len(self))
             
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            # Extract bounding box coordinates
+            # Extract bounding box coordinates and class indices
             boxes = image_anns[['x1', 'y1', 'x2', 'y2']].values
             
             # Clip coordinates to image boundaries
             boxes = np.clip(boxes, 0, [image.shape[1], image.shape[0], image.shape[1], image.shape[0]])
-            labels = np.zeros(len(boxes))  # All objects are the same class
+            
+            # Get class indices (already converted to integers in __init__)
+            class_labels = image_anns['class'].values  # Now these are integers
             
             # Apply transforms
             if self.transform:
                 transformed = self.transform(
                     image=image,
                     bboxes=boxes,
-                    class_labels=labels
+                    class_labels=class_labels
                 )
                 image = transformed['image']
                 boxes = np.clip(transformed['bboxes'], 0, 1)  # Clip to [0,1] range
-                labels = transformed['class_labels']
+                class_labels = transformed['class_labels']
             
             # Convert boxes to grid format
             obj_targets, box_targets = self.process_ground_truth(
@@ -215,12 +254,12 @@ class SKU110KDataset(Dataset):
             # Convert to tensor format
             image = torch.from_numpy(np.transpose(image, (2, 0, 1)))
             boxes = torch.from_numpy(np.array(boxes, dtype=np.float32))
-            labels = torch.from_numpy(np.array(labels, dtype=np.int64))
+            class_labels = torch.from_numpy(np.array(class_labels, dtype=np.int64))
             
             result = {
                 'image': image,
                 'boxes': boxes,
-                'labels': labels,
+                'class_labels': class_labels,
                 'obj_targets': obj_targets,
                 'box_targets': box_targets,
                 'image_name': image_name

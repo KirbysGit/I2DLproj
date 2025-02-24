@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
 from pathlib import Path
 import logging
@@ -11,6 +12,24 @@ from datetime import datetime
 import numpy as np
 from .utils import ColorLogger
 from colorama import Fore, Style
+
+class FocalLoss(nn.Module):
+    """Focal Loss for better handling of class imbalance"""
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(self, inputs, targets):
+        bce_loss = F.binary_cross_entropy_with_logits(
+            inputs, targets, reduction='none'
+        )
+        
+        # Apply focal scaling
+        pt = torch.exp(-bce_loss)
+        focal_loss = self.alpha * (1-pt)**self.gamma * bce_loss
+        
+        return focal_loss.mean()
 
 class Trainer:
     def __init__(self, model, config):
@@ -33,7 +52,11 @@ class Trainer:
         
         # Initialize loss functions
         self.box_loss = nn.SmoothL1Loss()
-        self.obj_loss = nn.BCEWithLogitsLoss()
+        self.obj_loss = FocalLoss(alpha=0.25, gamma=2.0)
+        
+        # Get loss weights from config
+        self.box_weight = config['training']['debug'].get('box_loss_weight', 5.0)
+        self.obj_weight = config['training']['debug'].get('obj_loss_weight', 1.0)
         
         # Setup logging
         self.writer = SummaryWriter(config['logging']['log_dir'])
@@ -68,6 +91,9 @@ class Trainer:
 
         # Add self.current_batch counter
         self.current_batch = 0
+
+        # Add self.current_epoch attribute
+        self.current_epoch = 0
 
         # Initialize weights tracking
         self.init_weights = {}
@@ -155,9 +181,118 @@ class Trainer:
                 return False
         return True
 
+    def _track_gradients(self, named_parameters):
+        """Track gradient statistics for debugging"""
+        grad_stats = {}
+        for name, param in named_parameters:
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                grad_mean = param.grad.mean().item()
+                grad_std = param.grad.std().item()
+                
+                grad_stats[name] = {
+                    'norm': grad_norm,
+                    'mean': grad_mean,
+                    'std': grad_std
+                }
+                
+                # Log significant gradient issues
+                if grad_norm > self.config['training']['debug']['grad_clip_value']:
+                    self.logger.warning(f"Large gradient in {name}: {grad_norm:.4f}")
+                elif grad_norm < 1e-8:
+                    self.logger.warning(f"Vanishing gradient in {name}: {grad_norm:.4f}")
+        
+        return grad_stats
+
+    def _track_activations(self, model_output, batch_idx):
+        """Track activation statistics for debugging"""
+        with torch.no_grad():
+            # Track various activation statistics
+            act_stats = {
+                'output_mean': model_output.mean().item(),
+                'output_std': model_output.std().item(),
+                'output_range': (model_output.min().item(), model_output.max().item())
+            }
+            
+            # Check for activation issues
+            if abs(act_stats['output_mean']) < 1e-8:
+                self.logger.warning(f"Near-zero activations in batch {batch_idx}")
+            elif abs(act_stats['output_std']) < 1e-4:
+                self.logger.warning(f"Low activation variance in batch {batch_idx}")
+        
+        return act_stats
+
+    def _visualize_predictions(self, images, predictions, targets, batch_idx, epoch):
+        """Visualize model predictions vs ground truth"""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import torch.nn.functional as F
+        
+        viz_path = Path(self.config['training']['debug']['visualization']['save_path'])
+        viz_path.mkdir(parents=True, exist_ok=True)
+        
+        conf_threshold = self.config['training']['debug']['visualization']['confidence_threshold']
+        max_images = min(self.config['training']['debug']['visualization']['max_images'], len(images))
+        
+        for i in range(max_images):
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+            
+            # Process image
+            img = images[i].detach().cpu().numpy().transpose(1, 2, 0)
+            img = img * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
+            img = np.clip(img, 0, 1)
+            
+            # Ground truth
+            ax1.imshow(img)
+            ax1.set_title('Ground Truth')
+            for box in targets[i]:
+                x1, y1, x2, y2 = box.detach().cpu().numpy()
+                ax1.add_patch(plt.Rectangle((x1, y1), x2-x1, y2-y1, 
+                                          fill=False, color='green', linewidth=2))
+            
+            # Predictions
+            ax2.imshow(img)
+            pred = predictions[i].detach()
+            
+            # Apply sigmoid to objectness scores
+            obj_scores = F.sigmoid(pred[..., 4])
+            conf_mask = obj_scores > conf_threshold
+            
+            # Log prediction stats
+            self.logger.info(f"\nPrediction Stats (Image {i}):")
+            self.logger.info(f"Max confidence: {obj_scores.max().item():.4f}")
+            self.logger.info(f"Mean confidence: {obj_scores.mean().item():.4f}")
+            self.logger.info(f"Boxes above threshold: {conf_mask.sum().item()}")
+            
+            # Get boxes above threshold
+            boxes = pred[conf_mask][..., :4].cpu().numpy()
+            scores = obj_scores[conf_mask].cpu().numpy()
+            
+            # Set title with max confidence (handle empty case)
+            max_conf = scores.max() if len(scores) > 0 else 0.0
+            ax2.set_title(f'Predictions (max conf: {max_conf:.2f})')
+            
+            # Only try to plot boxes if we have any
+            if len(boxes) > 0:
+                for box, score in zip(boxes, scores):
+                    x1, y1, x2, y2 = box
+                    ax2.add_patch(plt.Rectangle((x1, y1), x2-x1, y2-y1, 
+                                              fill=False, color='red', linewidth=2))
+                    ax2.text(x1, y1, f'{score:.2f}', color='red')
+            else:
+                ax2.text(0.5, 0.5, 'No detections', 
+                        horizontalalignment='center',
+                        transform=ax2.transAxes)
+            
+            # Add grid visualization
+            ax3.imshow(obj_scores.detach().cpu().numpy(), cmap='hot')
+            ax3.set_title('Objectness Heatmap')
+            
+            plt.savefig(viz_path / f'epoch_{epoch}_batch_{batch_idx}_img_{i}.png')
+            plt.close()
+
     def _process_batch(self, batch):
-        """Process a batch and compute loss"""
-        # Move batch to device
+        """Process a batch and compute loss with debugging"""
         images = batch['image'].to(self.device)
         obj_targets = batch['obj_targets'].to(self.device)
         box_targets = batch['box_targets'].to(self.device)
@@ -165,26 +300,53 @@ class Trainer:
         # Forward pass
         outputs = self.model(images)
         
-        # Calculate losses
-        obj_loss = self.obj_loss(outputs[..., 4], obj_targets)
-        box_loss = self.box_loss(outputs[..., :4], box_targets)
-        loss = obj_loss + box_loss
+        # Separate losses with different weights
+        box_loss = F.mse_loss(outputs[..., :4], box_targets) * 50.0  # Higher box weight
+        obj_loss = F.binary_cross_entropy_with_logits(
+            outputs[..., 4], 
+            obj_targets,
+            pos_weight=torch.tensor([10.0]).to(self.device)  # Weight positive examples more
+        )
         
-        # Backward pass
+        # Total loss
+        loss = box_loss + obj_loss
+        
+        # Accumulate gradients over multiple batches
+        loss = loss / self.config['training'].get('gradient_accumulation_steps', 1)
         loss.backward()
         
-        # Log weight updates (only if enabled)
-        if self._log_weight_updates:
-            with torch.no_grad():
-                for name, param in self.model.named_parameters():
-                    if param.grad is not None:
-                        weight_diff = (param.data - self.init_weights[name]).norm().item()
-                        if weight_diff > 0.001:  # Only log significant changes
-                            self.logger.info(f"Weight update for {name}: {weight_diff:.4f}")
+        self.current_batch += 1
         
-        # Optimizer step
-        self.optimizer.step()
-        self.optimizer.zero_grad()
+        # Only step optimizer after accumulating gradients
+        if self.current_batch % self.config['training'].get('gradient_accumulation_steps', 1) == 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+        
+        # Debug mode tracking
+        if self.config['training'].get('debug_mode', False):
+            # Track gradients
+            if self.config['training']['debug']['track_gradients']:
+                grad_stats = self._track_gradients(self.model.named_parameters())
+                self.logger.debug(f"Gradient stats: {grad_stats}")
+            
+            # Track activations
+            if self.config['training']['debug']['track_activations']:
+                act_stats = self._track_activations(outputs, self.current_batch)
+                self.logger.debug(f"Activation stats: {act_stats}")
+            
+            # Visualize predictions
+            if self.current_batch % self.config['dataset']['visualization_frequency'] == 0:
+                self._visualize_predictions(
+                    images, outputs, batch['boxes'], 
+                    self.current_batch, self.current_epoch
+                )
+        
+        # Debug info
+        if self.current_batch % 10 == 0:
+            self.logger.info(f"\nLoss components:")
+            self.logger.info(f"Box loss: {box_loss.item():.4f}")
+            self.logger.info(f"Objectness loss: {obj_loss.item():.4f}")
         
         return loss.item()
 
@@ -301,31 +463,68 @@ class Trainer:
             best_path = self.save_dir / 'best_model.pt'
             torch.save(checkpoint, best_path)
 
-    def train(self, train_loader, val_loader):
+    def train(self, train_loader, val_loader, early_stopper):
         if len(train_loader) == 0:
             self.logger.error("No training data available!")
             return
         
-        stage = self.config['training'].get('current_stage', 1)
-        start_epoch = self.config['training']['start_epoch']
-        end_epoch = self.config['training']['epochs']
-        
-        self.logger.info(f"Stage {stage}: Processing {len(train_loader)} batches per epoch")
-        
-        for epoch in range(start_epoch, end_epoch):
+        for epoch in range(self.config['training']['epochs']):
+            self.current_epoch = epoch
+            
             # Training phase
             epoch_loss = self.train_epoch(train_loader)
+            self.logger.info(f"Epoch {epoch + 1}: Loss={epoch_loss:.4f}")
             
-            # Log progress
-            self.logger.info(f"Epoch {epoch + 1}: Loss={epoch_loss['total']:.4f}")
-            
-            # Validation phase
+            # Validation and visualization
             if (epoch + 1) % self.config['logging']['save_frequency'] == 0:
                 metrics = self.validate(val_loader)
                 self.logger.info(f"Validation F1: {metrics['f1_score']:.4f}")
+                
+                # Early stopping check
+                if early_stopper(metrics['f1_score']):
+                    self.logger.info("Early stopping triggered!")
+                    break
+                
+                # Save best model
+                if metrics['f1_score'] > self.best_val_f1:
+                    self.best_val_f1 = metrics['f1_score']
+                    self.save_checkpoint('best_model.pt')
         
         return {
             'f1_score': self.best_val_f1,
-            'total_epochs': end_epoch,
-            'final_loss': epoch_loss['total']
+            'total_epochs': epoch + 1,
+            'final_loss': epoch_loss
         }
+
+    def calculate_iou_loss(self, pred_boxes, target_boxes):
+        """Calculate IoU loss between predicted and target boxes"""
+        # Convert predictions to corners format if needed
+        pred_x1 = pred_boxes[..., 0]
+        pred_y1 = pred_boxes[..., 1]
+        pred_x2 = pred_boxes[..., 2]
+        pred_y2 = pred_boxes[..., 3]
+        
+        # Get target corners
+        target_x1 = target_boxes[..., 0]
+        target_y1 = target_boxes[..., 1]
+        target_x2 = target_boxes[..., 2]
+        target_y2 = target_boxes[..., 3]
+        
+        # Calculate intersection areas
+        x1 = torch.max(pred_x1, target_x1)
+        y1 = torch.max(pred_y1, target_y1)
+        x2 = torch.min(pred_x2, target_x2)
+        y2 = torch.min(pred_y2, target_y2)
+        
+        intersection = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
+        
+        # Calculate union areas
+        pred_area = (pred_x2 - pred_x1) * (pred_y2 - pred_y1)
+        target_area = (target_x2 - target_x1) * (target_y2 - target_y1)
+        union = pred_area + target_area - intersection
+        
+        # Calculate IoU
+        iou = intersection / (union + 1e-6)
+        
+        # Return loss
+        return 1 - iou.mean()

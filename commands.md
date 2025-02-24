@@ -100,52 +100,32 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 # Training Commands
 
-## Quick Training Options
-
-### Test Mode (Fastest)
+## Quick Testing
 ```bash
-python -m src.quick_train --mode test --stages 1
+# Test with 20 images
+python -m src.quick_train --mode custom --stages 1 --samples 20
 ```
-- Uses only 5 images
-- 1 epoch per stage
-- Batch size of 2
-- Best for testing code changes quickly
 
-### Development Mode
+## Development
 ```bash
-python -m src.quick_train --mode dev --stages 1
+# Train with 50 images
+python -m src.quick_train --mode custom --stages 1 --samples 50
 ```
-- Uses 100 training images and 20 validation images
-- 2 epochs per stage
-- Batch size of 4
-- Good for development and debugging
 
-### Full Training Mode
+## Full Training
 ```bash
+# Full dataset training
 python -m src.quick_train --mode full --stages 1
 ```
-- Uses full dataset
-- Normal training configuration
-- For final model training
 
-## Original Training Command
-```bash
-python -m src.train_control --stages N
-```
-- N is the number of stages to train
-- Uses full configuration from config.yaml
+## Configuration Modes
+- `custom`: User-specified number of training images
+- `dev`: 100 images for development
+- `test`: 10 images for code testing
+- `full`: Complete dataset
 
-## Dataset Organization
-```bash
-python -m src.organize_dataset
-```
-- Organizes dataset images into train/val/test directories
-- Run this once before training
-
-## Notes
-- The `--stages` parameter controls how many training stages to run
-- Each mode can be run with multiple stages using `--stages N`
-- Test mode is fastest, dev mode is balanced, full mode is complete training
-- Use test mode for quick code verification
-- Use dev mode for algorithm development
-- Use full mode for final training
+## Visualization
+Results saved in:
+- Training plots: `results/visualizations/`
+- Logs: `results/logs/`
+- Model checkpoints: `models/`

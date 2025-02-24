@@ -7,9 +7,10 @@ import logging
 from .train_main import main as train_main
 
 class TrainingManager:
-    def __init__(self, config_path='config/config.yaml', mode='full'):
+    def __init__(self, config_path='config/config.yaml', mode='full', num_samples=None):
         self.config_path = config_path
-        self.mode = mode  # 'full', 'dev', or 'test'
+        self.mode = mode  # 'full', 'dev', 'test', or 'custom'
+        self.num_samples = num_samples  # New parameter for custom sample size
         self.history_path = Path('results/training_history.json')
         
         # Reset all training state
@@ -24,6 +25,8 @@ class TrainingManager:
             self._setup_dev_mode()
         elif mode == 'test':
             self._setup_test_mode()
+        elif mode == 'custom':
+            self._setup_custom_mode(num_samples)
 
     def _setup_dev_mode(self):
         """Setup faster development training"""
@@ -41,12 +44,64 @@ class TrainingManager:
         """Setup minimal test training"""
         self.config['dataset'].update({
             'test_mode': True,
-            'test_samples': 10
+            'test_samples': 10,
+            'visualization_frequency': 1
         })
         self.config['training'].update({
             'epochs_per_stage': 3,
             'batch_size': 2,
-            'save_frequency': 1
+            'learning_rate': 1e-4,
+            'warmup_epochs': 1,
+            'save_frequency': 1,
+            'debug_mode': True,
+            'debug': {
+                'track_gradients': True,
+                'track_activations': True,
+                'grad_clip_value': 1.0,
+                'log_frequency': 10,
+                'visualization': {
+                    'save_path': 'results/visualizations',
+                    'max_images': 4,
+                    'confidence_threshold': 0.1  # Lower this from 0.5 to see more predictions
+                },
+                'box_loss_weight': 1.0,
+                'obj_loss_weight': 1.0
+            },
+            'lr_schedule': {
+                'warmup_epochs': 1,
+                'min_lr': 1e-5
+            },
+            'optimizer': {
+                'type': 'adamw',
+                'betas': (0.9, 0.999),
+                'weight_decay': 0.01
+            }
+        })
+
+    def _setup_custom_mode(self, num_samples):
+        """Setup training with custom number of samples"""
+        self.config['dataset'].update({
+            'custom_mode': True,
+            'custom_samples': {
+                'train': num_samples,
+                'val': num_samples // 5  # 20% of train samples for validation
+            },
+            'visualization_frequency': 5  # Visualize every 5 batches
+        })
+        
+        self.config['training'].update({
+            'epochs_per_stage': 10,
+            'batch_size': 8,
+            'learning_rate': 1e-3,
+            'optimizer': {
+                'type': 'adam',
+                'betas': (0.9, 0.999)
+            },
+            'lr_schedule': {
+                'type': 'step',
+                'step_size': 3,
+                'gamma': 0.5
+            }
         })
 
     def reset_training_state(self):

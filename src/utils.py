@@ -165,26 +165,21 @@ def load_checkpoint(model, optimizer, path):
     return checkpoint['epoch']
 
 def custom_collate_fn(batch):
-    """Collate function for DataLoader"""
+    """Custom collate function for DataLoader"""
     images = []
     boxes = []
-    labels = []
+    labels = []  # This expects 'labels' but dataset provides 'class_labels'
     obj_targets = []
     box_targets = []
     
     for sample in batch:
-        # Handle image that's already a tensor
-        if isinstance(sample['image'], torch.Tensor):
-            images.append(sample['image'])
-        else:
-            images.append(torch.from_numpy(sample['image']))
-        
+        images.append(sample['image'])
         boxes.append(sample['boxes'])
-        labels.append(sample['labels'])
+        labels.append(sample['class_labels'])  # Changed from 'labels' to 'class_labels'
         obj_targets.append(sample['obj_targets'])
         box_targets.append(sample['box_targets'])
     
-    # Stack all tensors
+    # Stack tensors
     images = torch.stack(images)
     obj_targets = torch.stack(obj_targets)
     box_targets = torch.stack(box_targets)
@@ -192,7 +187,37 @@ def custom_collate_fn(batch):
     return {
         'image': images,
         'boxes': boxes,
-        'labels': labels,
+        'labels': torch.cat(labels),  # Keep as 'labels' for backward compatibility
         'obj_targets': obj_targets,
         'box_targets': box_targets
     }
+
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.01, mode='max'):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.counter = 0
+        self.best_value = None
+        self.should_stop = False
+    
+    def __call__(self, value):
+        if self.best_value is None:
+            self.best_value = value
+            return False
+        
+        if self.mode == 'max':
+            if value > self.best_value + self.min_delta:
+                self.best_value = value
+                self.counter = 0
+            else:
+                self.counter += 1
+        else:  # mode == 'min'
+            if value < self.best_value - self.min_delta:
+                self.best_value = value
+                self.counter = 0
+            else:
+                self.counter += 1
+        
+        self.should_stop = self.counter >= self.patience
+        return self.should_stop
