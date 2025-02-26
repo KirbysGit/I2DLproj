@@ -25,7 +25,9 @@ preprocessing:
 
 # Model Architecture Configuration
 model:
-  backbone: "resnet50"            # CNN backbone architecture
+  pretrained_backbone: true
+  backbone: "resnet50"
+  num_classes: 1  # Only detecting objects, no classification
   vit:
     patch_size: 16                # Size of image patches for ViT
     num_heads: 8                  # Number of attention heads

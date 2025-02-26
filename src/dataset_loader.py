@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 import albumentations as A
 import torch
 from pathlib import Path
-from .utils import ColorLogger
+
 
 class SKU110KDataset(Dataset):
     """
@@ -25,92 +25,46 @@ class SKU110KDataset(Dataset):
         self.config = config
         self.split = split
         self.transform = transform or self._get_transforms()
-        
-        # Initialize logger
-        self.logger = ColorLogger()
+    
         
         # Setup paths
         dataset_path = Path(config['dataset']['path'])
         self.image_dir = dataset_path / config['dataset'][f'{split}_path']
         annotations_path = dataset_path / config['dataset']['annotations_path']
         
-        # Load annotations
-        print(f"\nInitializing {split} dataset:")
-        print(f"- Image path: {self.image_dir}")
+        # Add data verification step
+        self._verify_dataset_structure(dataset_path, annotations_path)
+        
+        # Load annotations with validation
+        ann_file = annotations_path / f'annotations_{split}.csv'
+        self.annotations = self._load_and_validate_annotations(ann_file)
         
         # Add class mapping
         self.class_to_idx = {'object': 0}  # Map class names to indices
         
-        # Load annotations file with correct column names
-        ann_file = annotations_path / f'annotations_{split}.csv'
-        try:
-            # Define column names based on the CSV structure
-            column_names = [
-                'image_name',  # First column is the image name
-                'x1', 'y1', 'x2', 'y2',  # Bounding box coordinates
-                'class',  # Object class (e.g., 'object')
-                'width', 'height'  # Image dimensions
-            ]
-            
-            # Load CSV with specified column names
-            self.annotations = pd.read_csv(
-                ann_file, 
-                names=column_names,  # Use our defined column names
-                header=None  # CSV has no header row
-            )
-            
-            print("- Loaded annotations columns:", self.annotations.columns.tolist())
-            print("- First few rows:")
-            print(self.annotations.head())
-            print(f"- Loaded {len(self.annotations)} annotations")
-            
-            # Convert class strings to indices
-            self.annotations['class'] = self.annotations['class'].map(self.class_to_idx)
-            
-            print("- Classes mapped to indices:", self.class_to_idx)
-            
-            # Group by image
-            self.image_groups = self.annotations.groupby('image_name')
-            self.image_names = list(self.image_groups.groups.keys())
-            
-            if config['dataset'].get('test_mode', False):
-                print("- Test mode enabled")
-                self.image_names = self.image_names[:config['dataset']['test_samples']]
-                print(f"- Created {len(self.image_names)} test samples")
-            
-            print(f"- Total images: {len(self.image_names)}")
-            
-        except Exception as e:
-            print(f"Error loading annotations: {str(e)}")
-            print(f"Attempted to load file: {ann_file}")
-            print(f"File exists: {ann_file.exists()}")
-            if ann_file.exists():
-                print("First few lines of file:")
-                with open(ann_file, 'r') as f:
-                    print(f.read(500))
-            raise
+        # Validate class labels
+        unique_classes = self.annotations['class'].unique()
+        unknown_classes = [cls for cls in unique_classes if cls not in self.class_to_idx]
+        if unknown_classes:
+            raise ValueError(f"Found unknown classes in annotations: {unknown_classes}")
         
-        # Verify images exist
-        print("\nVerifying image files...")
-        valid_images = []
-        missing_images = []
-        for img_name in self.image_names:
-            img_path = self.image_dir / img_name
-            if img_path.exists():
-                valid_images.append(img_name)
-            else:
-                missing_images.append(img_name)
+        print(f"Found classes: {unique_classes}")
+        print(f"Class mapping: {self.class_to_idx}")
         
-        if missing_images:
-            print(f"Warning: {len(missing_images)} images not found:")
-            print(f"First few missing: {missing_images[:5]}")
+        # Group by image
+        self.image_groups = self.annotations.groupby('image_name')
+        self.image_names = list(self.image_groups.groups.keys())
         
-        self.image_names = valid_images
-        print(f"Using {len(valid_images)} valid images")
+        if config['dataset'].get('test_mode', False):
+            print("- Test mode enabled")
+            self.image_names = self.image_names[:config['dataset']['test_samples']]
+            print(f"- Created {len(self.image_names)} test samples")
+        
+        print(f"- Total images: {len(self.image_names)}")
         
         # Filter annotations to only include valid images
         self.annotations = self.annotations[
-            self.annotations['image_name'].isin(valid_images)
+            self.annotations['image_name'].isin(self.image_names)
         ]
         
         # Add caching for transformed images
@@ -137,22 +91,66 @@ class SKU110KDataset(Dataset):
             self.image_names = self.image_names[:num_samples]
             print(f"Using {num_samples} images for {split} in custom mode")
 
+    def _verify_dataset_structure(self, dataset_path, annotations_path):
+        """Verify the dataset structure and files exist"""
+        if not dataset_path.exists():
+            raise RuntimeError(f"Dataset path does not exist: {dataset_path}")
+            
+        if not self.image_dir.exists():
+            raise RuntimeError(f"Image directory does not exist: {self.image_dir}")
+            
+        if not annotations_path.exists():
+            raise RuntimeError(f"Annotations path does not exist: {annotations_path}")
+            
+        # Print dataset statistics
+        print(f"\nDataset Structure Verification:")
+        print(f"- Dataset root: {dataset_path}")
+        print(f"- Images path: {self.image_dir}")
+        print(f"- Annotations path: {annotations_path}")
+
+    def _load_and_validate_annotations(self, ann_file):
+        """Load and validate annotations file"""
+        if not ann_file.exists():
+            raise RuntimeError(f"Annotations file not found: {ann_file}")
+            
+        # Load annotations
+        column_names = ['image_name', 'x1', 'y1', 'x2', 'y2', 'class', 'width', 'height']
+        annotations = pd.read_csv(ann_file, names=column_names, header=None)
+        
+        # Validate annotations
+        self._validate_annotations(annotations)
+        
+        return annotations
+        
+    def _validate_annotations(self, annotations):
+        """Validate annotation format and content"""
+        required_columns = ['image_name', 'x1', 'y1', 'x2', 'y2', 'class']
+        missing_columns = [col for col in required_columns if col not in annotations.columns]
+        
+        if missing_columns:
+            raise ValueError(f"Missing required columns: {missing_columns}")
+            
+        # Validate coordinate values
+        invalid_coords = (
+            (annotations['x1'] >= annotations['x2']) |
+            (annotations['y1'] >= annotations['y2']) |
+            (annotations[['x1', 'x2', 'y1', 'y2']] < 0).any(axis=1)
+        )
+        
+        if invalid_coords.any():
+            print(f"Found {invalid_coords.sum()} invalid bounding boxes")
+            print("First few invalid annotations:")
+            print(annotations[invalid_coords].head())
+            
+        # Print annotation statistics
+        print(f"\nAnnotation Statistics:")
+        print(f"- Total annotations: {len(annotations)}")
+        print(f"- Unique images: {annotations['image_name'].nunique()}")
+        print(f"- Average boxes per image: {len(annotations) / annotations['image_name'].nunique():.2f}")
+
     def _get_transforms(self):
         """Get data augmentation transforms"""
         return A.Compose([
-            # Use Resize instead of RandomResizedCrop
-            A.Resize(
-                height=640,
-                width=640,
-                always_apply=True
-            ),
-            # Add basic augmentations
-            A.OneOf([
-                A.RandomBrightnessContrast(p=1),
-                A.RandomGamma(p=1),
-                A.HorizontalFlip(p=1)
-            ], p=0.5),
-            # Always normalize
             A.Normalize(
                 mean=[0.485, 0.456, 0.406],
                 std=[0.229, 0.224, 0.225],
@@ -160,8 +158,8 @@ class SKU110KDataset(Dataset):
             ),
         ], bbox_params=A.BboxParams(
             format='pascal_voc',
-            min_area=1024,  # Minimum box area
-            min_visibility=0.3,  # Minimum box visibility
+            min_area=0,
+            min_visibility=0.0,
             label_fields=['class_labels']
         ))
 
@@ -206,62 +204,92 @@ class SKU110KDataset(Dataset):
         return len(self.image_names)
 
     def __getitem__(self, idx):
-        """Get a single sample from the dataset with caching"""
+        """Get a single sample from the dataset with validation"""
         if idx in self.cache:
             return self.cache[idx]
         
         try:
-            # Get image name and its annotations
             image_name = self.image_names[idx]
             image_anns = self.image_groups.get_group(image_name)
             
-            # Load and preprocess image
+            # Load and validate image
             image_path = self.image_dir / image_name
             image = cv2.imread(str(image_path))
             
-            if image is None or image.size == 0:
-                print(f"Skipping corrupted image: {image_path}")
-                return self.__getitem__((idx + 1) % len(self))
+            if image is None:
+                raise ValueError(f"Failed to load image: {image_path}")
+            
+            if image.size == 0:
+                raise ValueError(f"Empty image: {image_path}")
+            
+            # Verify image dimensions are reasonable
+            if image.shape[0] > 4000 or image.shape[1] > 4000:
+                print(f"Warning: Large image detected: {image.shape}")
+                # Resize large images to reasonable dimensions while maintaining aspect ratio
+                scale = 4000 / max(image.shape[0], image.shape[1])
+                new_size = (int(image.shape[1] * scale), int(image.shape[0] * scale))
+                image = cv2.resize(image, new_size)
             
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            # Extract bounding box coordinates and class indices
-            boxes = image_anns[['x1', 'y1', 'x2', 'y2']].values
+            # Get original dimensions and target size
+            orig_height, orig_width = image.shape[:2]
+            target_size = self.config['preprocessing']['image_size']
             
-            # Clip coordinates to image boundaries
-            boxes = np.clip(boxes, 0, [image.shape[1], image.shape[0], image.shape[1], image.shape[0]])
+            # Calculate resize scale while preserving aspect ratio
+            scale = min(target_size[0] / orig_height, target_size[1] / orig_width)
             
-            # Get class indices (already converted to integers in __init__)
-            class_labels = image_anns['class'].values  # Now these are integers
+            # Resize image
+            new_height = int(orig_height * scale)
+            new_width = int(orig_width * scale)
+            resized_image = cv2.resize(image, (new_width, new_height))
             
-            # Apply transforms
+            # Create padded image
+            padded_image = np.zeros((target_size[0], target_size[1], 3), dtype=np.uint8)
+            pad_y = (target_size[0] - new_height) // 2
+            pad_x = (target_size[1] - new_width) // 2
+            padded_image[pad_y:pad_y+new_height, pad_x:pad_x+new_width] = resized_image
+            
+            # Extract and transform box coordinates
+            boxes = image_anns[['x1', 'y1', 'x2', 'y2']].values.astype(np.float32)
+            
+            # Scale coordinates
+            boxes = boxes * scale
+            
+            # Add padding offset
+            boxes[:, [0, 2]] += pad_x
+            boxes[:, [1, 3]] += pad_y
+            
+            # Normalize to [0, 1] range
+            boxes[:, [0, 2]] /= target_size[1]
+            boxes[:, [1, 3]] /= target_size[0]
+            
+            # Clip boxes to valid range
+            boxes = np.clip(boxes, 0, 1)
+            
+            # Convert class labels
+            class_labels = np.array([self.class_to_idx[label] for label in image_anns['class'].values])
+            
+            # Apply normalization transform
             if self.transform:
                 transformed = self.transform(
-                    image=image,
+                    image=padded_image,
                     bboxes=boxes,
                     class_labels=class_labels
                 )
-                image = transformed['image']
-                boxes = np.clip(transformed['bboxes'], 0, 1)  # Clip to [0,1] range
-                class_labels = transformed['class_labels']
-            
-            # Convert boxes to grid format
-            obj_targets, box_targets = self.process_ground_truth(
-                boxes, 
-                image_size=self.config['preprocessing']['image_size']
-            )
+                padded_image = transformed['image']
+                boxes = np.array(transformed['bboxes'])
+                class_labels = np.array(transformed['class_labels'])
             
             # Convert to tensor format
-            image = torch.from_numpy(np.transpose(image, (2, 0, 1)))
-            boxes = torch.from_numpy(np.array(boxes, dtype=np.float32))
-            class_labels = torch.from_numpy(np.array(class_labels, dtype=np.int64))
+            image = torch.from_numpy(np.transpose(padded_image, (2, 0, 1)))
+            boxes = torch.from_numpy(boxes.astype(np.float32))
+            class_labels = torch.from_numpy(class_labels)
             
             result = {
                 'image': image,
                 'boxes': boxes,
                 'class_labels': class_labels,
-                'obj_targets': obj_targets,
-                'box_targets': box_targets,
                 'image_name': image_name
             }
             
@@ -277,12 +305,16 @@ class SKU110KDataset(Dataset):
 
     def process_ground_truth(self, boxes, image_size=(640, 640)):
         """Convert ground truth boxes to grid format"""
-        grid_size = (20, 20)  # Based on model's output size
+        grid_size = (20, 20)
         grid_h, grid_w = grid_size
         
         # Initialize target tensors
         obj_targets = torch.zeros(grid_h, grid_w)
         box_targets = torch.zeros(grid_h, grid_w, 4)
+        
+        # Normalize boxes to [0,1] range if not already
+        if boxes.max() > 1:
+            boxes = boxes / np.array([image_size[1], image_size[0], image_size[1], image_size[0]])
         
         # Convert boxes to grid cells
         for box in boxes:
