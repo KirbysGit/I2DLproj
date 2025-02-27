@@ -17,23 +17,20 @@ class ResNetBackbone(nn.Module):
             weights = None
         resnet = models.resnet50(weights=weights)
         
-        # Remove the final layers (avgpool and fc)
-        self.backbone = nn.ModuleDict({
-            # conv1 and maxpool
-            'layer0': nn.Sequential(
-                resnet.conv1,
-                resnet.bn1,
-                resnet.relu,
-                resnet.maxpool
-            ),
-            'layer1': resnet.layer1,  # 256 channels
-            'layer2': resnet.layer2,  # 512 channels
-            'layer3': resnet.layer3,  # 1024 channels
-            'layer4': resnet.layer4   # 2048 channels
-        })
+        # Remove final layers
+        self.layer0 = nn.Sequential(
+            resnet.conv1,
+            resnet.bn1,
+            resnet.relu,
+            resnet.maxpool
+        )
+        self.layer1 = resnet.layer1  # 256 channels
+        self.layer2 = resnet.layer2  # 512 channels
+        self.layer3 = resnet.layer3  # 1024 channels
+        self.layer4 = resnet.layer4  # 2048 channels
         
+        # Store output channels for FPN
         self.out_channels = {
-            'layer0': 64,
             'layer1': 256,
             'layer2': 512,
             'layer3': 1024,
@@ -51,27 +48,29 @@ class ResNetBackbone(nn.Module):
             dict: Dictionary of feature maps at different scales
         """
         features = {}
-        input_shape = x.shape[-2:]  # Store original input shape
+        input_shape = x.shape[-2:]
         
         # Extract features at each scale
-        x = self.backbone['layer0'](x)
+        x = self.layer0(x)
         features['layer0'] = x
-        print(f"layer0 shape: {x.shape}, reduction: {input_shape[0]/x.shape[-2]}x")
         
-        x = self.backbone['layer1'](x)
+        x = self.layer1(x)
         features['layer1'] = x
-        print(f"layer1 shape: {x.shape}, reduction: {input_shape[0]/x.shape[-2]}x")
         
-        x = self.backbone['layer2'](x)
+        x = self.layer2(x)
         features['layer2'] = x
-        print(f"layer2 shape: {x.shape}, reduction: {input_shape[0]/x.shape[-2]}x")
         
-        x = self.backbone['layer3'](x)
+        x = self.layer3(x)
         features['layer3'] = x
-        print(f"layer3 shape: {x.shape}, reduction: {input_shape[0]/x.shape[-2]}x")
         
-        x = self.backbone['layer4'](x)
+        x = self.layer4(x)
         features['layer4'] = x
-        print(f"layer4 shape: {x.shape}, reduction: {input_shape[0]/x.shape[-2]}x")
+        
+        # Print shapes in verbose mode
+        verbose = getattr(self, 'verbose', False)
+        if verbose and not hasattr(self, '_printed_shapes'):
+            self._printed_shapes = True
+            for name, feat in features.items():
+                print(f"{name} shape: {feat.shape}, reduction: {input_shape[0]/feat.shape[-2]}x")
         
         return features 

@@ -1,0 +1,28 @@
+# Test configuration with smaller dataset and fewer epochs
+model:
+  pretrained_backbone: true
+  fpn_out_channels: 256
+  num_classes: 1  # Binary classification (0: background, 1: object)
+  num_anchors: 6
+  verbose: true  # Enable debug output
+
+training:
+  batch_size: 2  # Smaller batch for testing
+  num_workers: 0  # Set to 0 for easier debugging
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 2
+  save_freq: 1
+  grad_clip: 1.0
+  save_dir: 'test_checkpoints'
+  use_wandb: false
+  project_name: 'sku-detection-test'
+  
+  # Test settings
+  max_samples: 16  # Even smaller dataset for faster testing
+  verbose: true    # More detailed output 
+  visualize: true  # Enable visualization
+  visualize_features: true  # Enable feature map visualization
+  vis_threshold: 0.1  # Lower threshold to see more predictions
+  visualize_anchors: true  # Enable anchor visualization
+  max_anchors_to_show: 50  # Number of anchors to visualize per level

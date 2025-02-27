@@ -1,0 +1,18 @@
+# Training configuration
+model:
+  pretrained_backbone: true
+  fpn_out_channels: 256
+  num_classes: 1
+  num_anchors: 6
+
+training:
+  batch_size: 8
+  num_workers: 4
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 100
+  save_freq: 5
+  grad_clip: 1.0
+  save_dir: 'checkpoints'
+  use_wandb: false  # Set to true if using wandb
+  project_name: 'sku-detection' 

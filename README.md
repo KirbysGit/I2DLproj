@@ -43,8 +43,11 @@ Clone repository
 git clone <repository_url>
 cd object_detection_framework
 ```
-
 Install dependencies
 
-## Usage
+```bash
+pip install -r requirements.txt
+```
+## Running Tests
+
 

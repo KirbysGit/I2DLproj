@@ -1,112 +1,148 @@
 import torch
-import numpy as np
+import math
+from typing import List, Tuple
 
 class AnchorGenerator:
-    """
-    Generate anchors for each feature level of the FPN.
-    Creates a set of anchor boxes with different scales and aspect ratios.
-    """
+    """Generate anchors for object detection."""
     
-    def __init__(self, 
-                 feature_map_sizes=None,  # List of feature map sizes [(H1,W1), (H2,W2), ...]
-                 strides=[4, 8, 16, 32],
-                 # Adjust scales per stride level
-                 anchor_scales={
-                     4: [32, 64],
-                     8: [64, 128],
-                     16: [128, 256],
-                     32: [256, 512]
-                 },
-                 anchor_ratios=[0.5, 1.0, 2.0]):
+    def __init__(self,
+                 base_sizes: List[int] = [32, 64, 128, 256],  # Base anchor sizes for each FPN level
+                 aspect_ratios: List[float] = [0.5, 1.0, 2.0],  # Width/height ratios
+                 scales: List[float] = [1.0]):  # Additional scaling factors
         """
-        Initialize anchor generator with stride-specific scales.
+        Initialize anchor generator.
         
         Args:
-            feature_map_sizes: List of (height, width) tuples for each feature level
-            strides: Feature map strides relative to input image
-            anchor_scales: Dictionary of anchor box sizes per stride
-            anchor_ratios: List of anchor aspect ratios (height/width)
+            base_sizes: Base anchor sizes for each feature pyramid level
+            aspect_ratios: Width/height ratios for anchors
+            scales: Additional scaling factors for base sizes
         """
-        self.anchor_scales = anchor_scales
-        self.anchor_ratios = anchor_ratios
-        self.strides = strides
-        self.feature_map_sizes = feature_map_sizes
+        self.base_sizes = base_sizes
+        self.aspect_ratios = aspect_ratios
+        self.scales = scales
+        self.num_anchors = len(aspect_ratios) * len(scales)
         
-        # Generate base anchors for each feature level
+        # Pre-compute base anchors for each combination
         self.base_anchors = self._generate_base_anchors()
+    
+    def _generate_base_anchors(self) -> List[torch.Tensor]:
+        """Generate base anchors for each FPN level."""
+        base_anchors = []
         
-    def _generate_base_anchors(self):
-        """Generate base anchor boxes for all scales and ratios"""
-        base_anchors = {}
-        
-        for stride in self.strides:
-            anchors = []
-            # Use stride-specific scales
-            for scale in self.anchor_scales[stride]:
-                for ratio in self.anchor_ratios:
-                    h = scale * np.sqrt(ratio)
-                    w = scale * np.sqrt(1.0 / ratio)
+        for base_size in self.base_sizes:
+            level_anchors = []
+            for ratio in self.aspect_ratios:
+                for scale in self.scales:
+                    # Calculate width and height
+                    size = base_size * scale
+                    w = size * math.sqrt(ratio)
+                    h = size / math.sqrt(ratio)
                     
-                    # Center-based anchor box [x_center, y_center, width, height]
-                    anchors.append([-w/2, -h/2, w/2, h/2])
+                    # Create anchor box [x1, y1, x2, y2] centered at origin
+                    anchor = torch.tensor([
+                        -w/2, -h/2, w/2, h/2
+                    ], dtype=torch.float32)
+                    
+                    level_anchors.append(anchor)
             
-            base_anchors[stride] = torch.tensor(anchors, dtype=torch.float32)
+            # Stack anchors for this level
+            base_anchors.append(torch.stack(level_anchors))
         
         return base_anchors
     
-    def _shift_anchors(self, base_anchors, stride, height, width):
+    def generate_anchors(self, 
+                        feature_maps: List[torch.Tensor]
+                        ) -> List[torch.Tensor]:
         """
-        Shift base anchors to all positions on the feature map.
+        Generate anchors for each location in feature maps.
         
         Args:
-            base_anchors: Base anchor boxes [N, 4]
-            stride: Feature map stride
-            height, width: Feature map size
+            feature_maps: List of feature maps from FPN [B, C, H, W]
             
         Returns:
-            shifted_anchors: [height * width * N, 4]
+            List of anchor tensors for each level [num_anchors*H*W, 4]
         """
-        # Generate grid coordinates
-        shift_x = torch.arange(0, width * stride, stride, dtype=torch.float32)
-        shift_y = torch.arange(0, height * stride, stride, dtype=torch.float32)
-        shift_y, shift_x = torch.meshgrid(shift_y, shift_x, indexing='ij')
+        anchors_per_level = []
         
-        # Reshape shifts to [height * width, 4]
-        shifts = torch.stack([
-            shift_x.reshape(-1),
-            shift_y.reshape(-1),
-            shift_x.reshape(-1),
-            shift_y.reshape(-1)
-        ], dim=1)
+        for level_id, feature_map in enumerate(feature_maps):
+            # Get feature map size
+            _, _, height, width = feature_map.shape
+            
+            # Generate grid coordinates
+            grid_x = torch.arange(0, width, device=feature_map.device)
+            grid_y = torch.arange(0, height, device=feature_map.device)
+            grid_y, grid_x = torch.meshgrid(grid_y, grid_x, indexing='ij')
+            
+            # Calculate stride based on feature level
+            stride = self.base_sizes[level_id]
+            
+            # Shift coordinates to input image scale
+            grid_x = grid_x * stride + stride // 2
+            grid_y = grid_y * stride + stride // 2
+            
+            # Repeat grid for each anchor
+            grid_x = grid_x.unsqueeze(-1).repeat(1, 1, self.num_anchors)
+            grid_y = grid_y.unsqueeze(-1).repeat(1, 1, self.num_anchors)
+            
+            # Get base anchors for this level
+            base_anchors = self.base_anchors[level_id]
+            
+            # Broadcast base anchors to all positions
+            anchors = torch.zeros(height, width, self.num_anchors, 4, 
+                                device=feature_map.device)
+            anchors[..., 0] = grid_x - base_anchors[:, 0]  # x1
+            anchors[..., 1] = grid_y - base_anchors[:, 1]  # y1
+            anchors[..., 2] = grid_x + base_anchors[:, 2]  # x2
+            anchors[..., 3] = grid_y + base_anchors[:, 3]  # y2
+            
+            # Reshape to [H*W*num_anchors, 4]
+            anchors = anchors.view(-1, 4)
+            anchors_per_level.append(anchors)
         
-        # Add dimension for broadcasting
-        shifts = shifts.view(-1, 1, 4)
-        base_anchors = base_anchors.view(1, -1, 4)
-        
-        # Generate all anchors
-        anchors = shifts + base_anchors
-        return anchors.reshape(-1, 4)
+        return anchors_per_level
     
-    def generate_anchors(self, image_size):
-        """
-        Generate anchors for all feature levels.
+    def generate_anchors_for_level(self, feature_map_size, stride, device):
+        """Generate anchors for a single feature level."""
+        H, W = feature_map_size
         
-        Args:
-            image_size: (height, width) of input image
-            
-        Returns:
-            dict: Anchors for each feature level {stride: anchors_tensor}
-        """
-        if self.feature_map_sizes is None:
-            # Calculate feature map sizes based on image size and strides
-            self.feature_map_sizes = [
-                (image_size[0] // stride, image_size[1] // stride)
-                for stride in self.strides
-            ]
+        # Generate grid coordinates
+        grid_x = torch.arange(0, W, device=device)
+        grid_y = torch.arange(0, H, device=device)
+        grid_y, grid_x = torch.meshgrid(grid_y, grid_x, indexing='ij')
         
-        anchors = {}
-        for stride, (height, width) in zip(self.strides, self.feature_map_sizes):
-            base_anchors = self.base_anchors[stride]
-            anchors[stride] = self._shift_anchors(base_anchors, stride, height, width)
-            
-        return anchors 
+        # Convert to center coordinates and scale by stride
+        centers_x = (grid_x + 0.5) * stride
+        centers_y = (grid_y + 0.5) * stride
+        
+        # Generate base anchors
+        base_anchors = []
+        for scale in self.scales:
+            scale_size = stride * scale
+            for ratio in self.aspect_ratios:
+                w = scale_size * math.sqrt(ratio)
+                h = scale_size / math.sqrt(ratio)
+                base_anchors.append([-w/2, -h/2, w/2, h/2])
+        
+        base_anchors = torch.tensor(base_anchors, device=device)
+        num_base_anchors = len(base_anchors)
+        
+        # Combine grid centers with base anchors
+        centers = torch.stack([
+            centers_x.reshape(-1),
+            centers_y.reshape(-1),
+            centers_x.reshape(-1),
+            centers_y.reshape(-1)
+        ], dim=1)  # [H*W, 4]
+        
+        # Add centers to base anchors for each position
+        anchors = (centers.unsqueeze(1) + base_anchors.unsqueeze(0))  # [H*W, A, 4]
+        return anchors.reshape(-1, 4)  # [H*W*A, 4]
+    
+    def __repr__(self):
+        """String representation."""
+        return (f"AnchorGenerator(\n"
+                f"  base_sizes={self.base_sizes},\n"
+                f"  aspect_ratios={self.aspect_ratios},\n"
+                f"  scales={self.scales},\n"
+                f"  num_anchors_per_location={self.num_anchors}\n"
+                f")") 
