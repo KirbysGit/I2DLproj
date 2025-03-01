@@ -5,6 +5,9 @@ import logging
 from tqdm import tqdm
 import wandb  # For experiment tracking
 from utils.visualization import DetectionVisualizer
+from utils.box_ops import box_iou
+from utils.metrics import DetectionMetrics
+
 
 class Trainer:
     """Handles the training process including validation and checkpointing."""
@@ -80,14 +83,17 @@ class Trainer:
         self.visualizer = DetectionVisualizer()
     
     def train_epoch(self, epoch):
-        """Train for one epoch."""
+        """Train for one epoch with better formatting."""
         self.model.train()
         total_loss = 0
         total_cls_loss = 0
         total_box_loss = 0
-        num_batches = len(self.train_loader)
         
-        with tqdm(self.train_loader, desc=f'Epoch {epoch}') as pbar:
+        print(f"\n{'='*80}")
+        print(f"Epoch {epoch+1}/{self.config['epochs']}")
+        print(f"{'='*80}")
+        
+        with tqdm(self.train_loader, desc=f'Training') as pbar:
             for batch_idx, batch in enumerate(pbar):
                 # Move data to device
                 images = batch['images'].to(self.device)
@@ -128,6 +134,7 @@ class Trainer:
                 # Backward pass
                 losses.backward()
                 
+                # Add gradient clipping
                 if self.config['grad_clip']:
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(), 
@@ -137,36 +144,51 @@ class Trainer:
                 self.optimizer.step()
                 self.scheduler.step()
                 
-                # Update progress bar with more details
+                # Update progress bar with cleaner format
                 avg_loss = total_loss / (batch_idx + 1)
                 avg_cls_loss = total_cls_loss / (batch_idx + 1)
                 avg_box_loss = total_box_loss / (batch_idx + 1)
                 
                 pbar.set_postfix({
-                    'loss': f'{avg_loss:.4f}',
-                    'cls_loss': f'{avg_cls_loss:.4f}',
-                    'box_loss': f'{avg_box_loss:.4f}',
-                    'lr': f'{self.scheduler.get_last_lr()[0]:.6f}'
+                    'Loss': f'{avg_loss:.4f}',
+                    'Cls': f'{avg_cls_loss:.4f}',
+                    'Box': f'{avg_box_loss:.4f}',
+                    'LR': f'{self.scheduler.get_last_lr()[0]:.6f}'
                 })
-                
-                # Log to wandb
-                if self.config['use_wandb']:
-                    wandb.log({
-                        'train_loss': losses.item(),
-                        'learning_rate': self.scheduler.get_last_lr()[0]
-                    })
         
-        return total_loss / len(self.train_loader)
+        # Print epoch summary
+        print(f"\nEpoch Summary:")
+        print(f"  Training Loss: {avg_loss:.4f}")
+        print(f"  - Classification: {avg_cls_loss:.4f}")
+        print(f"  - Box Regression: {avg_box_loss:.4f}")
+        
+        # Add quality metrics
+        metrics = {
+            'train_loss': avg_loss,
+            'cls_loss': avg_cls_loss,
+            'box_loss': avg_box_loss,
+            'lr': self.scheduler.get_last_lr()[0],
+            'pos_ratio': matched_labels.sum() / len(matched_labels),
+            'mean_iou': ious[matched_labels > 0].mean().item() if (matched_labels > 0).any() else 0
+        }
+        
+        return metrics
     
     @torch.no_grad()
     def validate(self):
-        """Run validation with visualization."""
+        """Validation with detailed metrics."""
         self.model.eval()
         total_loss = 0
         total_cls_loss = 0
         total_box_loss = 0
         
-        for batch in tqdm(self.val_loader, desc='Validation'):
+        print(f"\n{'='*80}")
+        print("Validation")
+        print(f"{'='*80}")
+        
+        all_metrics = []
+        
+        for batch in tqdm(self.val_loader, desc='Validating'):
             # Move data to device
             images = batch['images'].to(self.device)
             boxes = batch['boxes'].to(self.device)
@@ -193,15 +215,13 @@ class Trainer:
         avg_cls_loss = total_cls_loss / num_batches
         avg_box_loss = total_box_loss / num_batches
         
-        print(f"\nValidation losses:")
-        print(f"Total: {avg_loss:.4f}")
-        print(f"Classification: {avg_cls_loss:.4f}")
-        print(f"Box Regression: {avg_box_loss:.4f}")
+        # Print validation summary
+        print(f"\nValidation Summary:")
+        print(f"  Total Loss: {avg_loss:.4f}")
+        print(f"  - Classification: {avg_cls_loss:.4f}")
+        print(f"  - Box Regression: {avg_box_loss:.4f}")
         
-        if self.config['use_wandb']:
-            wandb.log({'val_loss': avg_loss})
-        
-        # Visualize predictions and matches if requested
+        # Collect metrics if available
         if self.config.get('visualize', False):
             with torch.no_grad():
                 batch = next(iter(self.val_loader))
@@ -213,20 +233,42 @@ class Trainer:
                 
                 # Get predictions and matches
                 outputs = self.model(images)
+                
+                # Compute IoUs for visualization
+                all_anchors = torch.cat(outputs['anchors'], dim=0)
+                ious = box_iou(all_anchors, targets['boxes'][0])
+                
                 matched_labels, matched_boxes = self.model.detection_head.match_anchors_to_targets(
                     outputs['anchors'],
                     targets['boxes'][0],
                     targets['labels'][0]
                 )
                 
-                # Visualize matches
+                # Visualize matches with IoUs
                 self.visualizer.visualize_matched_anchors(
                     images[0],
                     outputs['anchors'],
                     targets['boxes'][0],
                     matched_labels,
-                    matched_boxes
+                    matched_boxes,
+                    ious
                 )
+                
+                # Compute metrics
+                metrics = DetectionMetrics.compute_matching_quality(
+                    matched_labels, ious
+                )
+                all_metrics.append(metrics)
+        
+        # Print average metrics if available
+        if all_metrics:
+            print("\nDetection Metrics:")
+            avg_metrics = {
+                k: sum(m[k] for m in all_metrics) / len(all_metrics)
+                for k in all_metrics[0].keys()
+            }
+            for k, v in avg_metrics.items():
+                print(f"  {k}: {v:.4f}")
         
         return avg_loss
     

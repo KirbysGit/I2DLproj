@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 from typing import Dict, List, Tuple
+from utils.box_ops import box_iou
+from utils.metrics import DetectionMetrics
 
 class DetectionVisualizer:
     """Visualization tools for object detection."""
@@ -173,49 +175,100 @@ class DetectionVisualizer:
                                 anchors: List[torch.Tensor],
                                 target_boxes: torch.Tensor,
                                 matched_labels: torch.Tensor,
-                                matched_boxes: torch.Tensor):
-        """Visualize anchor matching results."""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
+                                matched_boxes: torch.Tensor,
+                                ious: torch.Tensor):
+        """Enhanced visualization with quality metrics and better layout."""
+        # Create figure with GridSpec for flexible layout
+        fig = plt.figure(figsize=(20, 15))
+        gs = plt.GridSpec(2, 3, figure=fig)
+        
+        # Main image with ground truth (larger)
+        ax1 = fig.add_subplot(gs[0, :2])
+        ax1.set_title('Ground Truth Boxes', fontsize=12, pad=10)
         
         # Show image
         img = image.cpu().permute(1, 2, 0).numpy()
         img = (img - img.min()) / (img.max() - img.min())
-        
-        # Plot all anchors and ground truth
         ax1.imshow(img)
-        ax1.set_title('All Anchors and Ground Truth')
         
-        # Plot ground truth boxes in green
+        # Plot ground truth boxes
         for box in target_boxes.cpu().numpy():
             rect = patches.Rectangle(
                 (box[0], box[1]),
                 box[2] - box[0],
                 box[3] - box[1],
                 linewidth=2,
-                edgecolor='g',
-                facecolor='none'
+                edgecolor='lime',
+                facecolor='none',
+                alpha=0.8
             )
             ax1.add_patch(rect)
+        ax1.axis('off')
         
-        # Plot matched anchors
+        # Matched anchors visualization
+        ax2 = fig.add_subplot(gs[1, :2])
+        ax2.set_title('Matched Anchors (with IoU scores)', fontsize=12, pad=10)
         ax2.imshow(img)
-        ax2.set_title('Matched Anchors')
         
+        # Plot positive matches with IoU scores
         all_anchors = torch.cat(anchors, dim=0).cpu().numpy()
         matched_labels = matched_labels.cpu().numpy()
+        max_ious, _ = ious.max(dim=1)
+        max_ious = max_ious.cpu().numpy()
         
-        # Plot positive matches in red
-        positive_anchors = all_anchors[matched_labels == 1]
-        for box in positive_anchors:
+        positive_indices = matched_labels == 1
+        positive_anchors = all_anchors[positive_indices]
+        positive_ious = max_ious[positive_indices]
+        
+        # Color map based on IoU scores
+        colors = plt.cm.RdYlGn(positive_ious)  # Red to Green colormap
+        
+        for box, iou, color in zip(positive_anchors, positive_ious, colors):
             rect = patches.Rectangle(
                 (box[0], box[1]),
                 box[2] - box[0],
                 box[3] - box[1],
-                linewidth=1,
-                edgecolor='r',
+                linewidth=1.5,
+                edgecolor=color,
                 facecolor='none',
-                alpha=0.5
+                alpha=0.7
             )
             ax2.add_patch(rect)
+            ax2.text(box[0], box[1], f'{iou:.2f}', 
+                    color='white', fontsize=8,
+                    bbox=dict(facecolor=color, alpha=0.7))
+        ax2.axis('off')
         
+        # IoU Distribution
+        ax3 = fig.add_subplot(gs[0, 2])
+        ax3.set_title('IoU Distribution', fontsize=12, pad=10)
+        ax3.hist(max_ious, bins=50, color='skyblue', edgecolor='black')
+        ax3.set_xlabel('IoU')
+        ax3.set_ylabel('Count')
+        ax3.grid(True, alpha=0.3)
+        
+        # Metrics summary
+        ax4 = fig.add_subplot(gs[1, 2])
+        metrics = DetectionMetrics.compute_matching_quality(matched_labels, ious)
+        ax4.set_title('Detection Metrics', fontsize=12, pad=10)
+        
+        # Format metric names
+        metric_names = {
+            'mean_iou': 'Mean IoU',
+            'num_positive': 'Positive Anchors',
+            'positive_ratio': 'Positive Ratio',
+            'max_iou': 'Max IoU',
+            'min_iou': 'Min IoU'
+        }
+        
+        y_pos = np.arange(len(metrics))
+        ax4.barh(y_pos, list(metrics.values()), color='skyblue')
+        ax4.set_yticks(y_pos)
+        ax4.set_yticklabels([metric_names[k] for k in metrics.keys()])
+        
+        # Add value labels on bars
+        for i, v in enumerate(metrics.values()):
+            ax4.text(v, i, f'{v:.3f}', va='center')
+        
+        plt.tight_layout()
         plt.show() 

@@ -14,6 +14,7 @@ from training.optimizer import OptimizerBuilder
 from training.scheduler import WarmupCosineScheduler
 from training.trainer import Trainer
 from model.losses import DetectionLoss
+from utils.metrics import DetectionMetrics
 
 def test_optimizer():
     """Test optimizer building"""

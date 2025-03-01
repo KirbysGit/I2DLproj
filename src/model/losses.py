@@ -168,4 +168,16 @@ class DetectionLoss(nn.Module):
             'loss': total_loss,
             'cls_loss': cls_loss,
             'box_loss': box_loss
-        } 
+        }
+
+class IoUWeightedBoxLoss(nn.Module):
+    def forward(self, pred_boxes, target_boxes, ious):
+        """IoU-weighted box regression loss."""
+        # Basic regression loss
+        loss = F.smooth_l1_loss(pred_boxes, target_boxes, reduction='none')
+        
+        # Weight by IoU
+        iou_weights = ious.detach()  # Don't backprop through weights
+        weighted_loss = (loss * iou_weights.unsqueeze(-1)).mean()
+        
+        return weighted_loss 

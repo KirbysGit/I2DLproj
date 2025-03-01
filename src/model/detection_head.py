@@ -3,7 +3,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .anchor_generator import AnchorGenerator
 from typing import List, Tuple
-from .box_ops import box_iou
+from utils.box_ops import box_iou
+
+class BoxCoder:
+    """Box coordinate conversion utilities."""
+    def encode(self, src_boxes, dst_boxes):
+        """Convert box coordinates to deltas."""
+        widths = src_boxes[:, 2] - src_boxes[:, 0]
+        heights = src_boxes[:, 3] - src_boxes[:, 1]
+        ctr_x = src_boxes[:, 0] + 0.5 * widths
+        ctr_y = src_boxes[:, 1] + 0.5 * heights
+
+        dst_widths = dst_boxes[:, 2] - dst_boxes[:, 0]
+        dst_heights = dst_boxes[:, 3] - dst_boxes[:, 1]
+        dst_ctr_x = dst_boxes[:, 0] + 0.5 * dst_widths
+        dst_ctr_y = dst_boxes[:, 1] + 0.5 * dst_heights
+
+        # Compute deltas
+        dx = (dst_ctr_x - ctr_x) / widths
+        dy = (dst_ctr_y - ctr_y) / heights
+        dw = torch.log(dst_widths / widths)
+        dh = torch.log(dst_heights / heights)
+
+        return torch.stack([dx, dy, dw, dh], dim=1)
 
 class DetectionHead(nn.Module):
     """
@@ -58,6 +80,9 @@ class DetectionHead(nn.Module):
         # Initialize weights
         self._initialize_weights()
         
+        # Initialize box coder
+        self.box_coder = BoxCoder()
+        
     def _initialize_weights(self):
         """Initialize weights with Xavier/Kaiming initialization"""
         for m in self.modules():
@@ -91,46 +116,60 @@ class DetectionHead(nn.Module):
         
         return cls_scores, bbox_preds
     
-    def match_anchors_to_targets(self, anchors: List[torch.Tensor], 
-                               target_boxes: torch.Tensor,
-                               target_labels: torch.Tensor,
-                               iou_threshold: float = 0.5) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Match anchors to ground truth boxes.
-        
-        Args:
-            anchors: List of anchor boxes for each FPN level [num_anchors, 4]
-            target_boxes: Ground truth boxes [num_boxes, 4]
-            target_labels: Ground truth labels [num_boxes]
-            iou_threshold: IoU threshold for positive matches
-            
-        Returns:
-            matched_labels: Labels for each anchor (0: background, 1: object)
-            matched_boxes: Target boxes for each anchor
-        """
-        # Combine all anchors
+    def match_anchors_to_targets(self, anchors, target_boxes, target_labels, 
+                               base_threshold=0.4,
+                               center_radius=2.5):
+        """Improved anchor matching with quality-aware assignment."""
         all_anchors = torch.cat(anchors, dim=0)
         device = all_anchors.device
         
-        # Initialize labels as background (0)
-        matched_labels = torch.zeros(len(all_anchors), device=device)
+        matched_labels = torch.zeros(len(all_anchors), dtype=torch.long, device=device)
         matched_boxes = torch.zeros_like(all_anchors)
         
-        if len(target_boxes) == 0:
-            return matched_labels, matched_boxes
+        # Get anchor centers
+        anchor_centers = (all_anchors[:, :2] + all_anchors[:, 2:]) / 2
         
-        # Calculate IoU between all anchors and all target boxes
-        ious = box_iou(all_anchors, target_boxes)  # [num_anchors, num_targets]
-        
-        # For each anchor, get the best matching target
-        best_target_iou, best_target_idx = ious.max(dim=1)
-        
-        # Assign positive labels where IoU > threshold
-        positive_mask = best_target_iou > iou_threshold
-        matched_labels[positive_mask] = 1
-        
-        # Assign corresponding target boxes
-        matched_boxes[positive_mask] = target_boxes[best_target_idx[positive_mask]]
+        for target_idx in range(len(target_boxes)):
+            target_box = target_boxes[target_idx]
+            target_center = (target_box[:2] + target_box[2:]) / 2
+            target_size = target_box[2:] - target_box[:2]
+            
+            # Calculate IoU between all anchors and current target
+            ious = box_iou(all_anchors, target_box.unsqueeze(0)).squeeze(1)
+            
+            # Get anchors within center region
+            center_radius_pixels = center_radius * torch.min(target_size)
+            distances = torch.norm(anchor_centers - target_center, dim=1)
+            center_mask = distances < center_radius_pixels
+            
+            # Quality-aware thresholding
+            if center_mask.any():
+                # Get IoUs for center region anchors
+                center_ious = ious[center_mask]
+                
+                # Calculate adaptive threshold
+                mean_iou = center_ious.mean()
+                std_iou = center_ious.std()
+                dynamic_threshold = mean_iou + std_iou
+                
+                # Use maximum of base and dynamic threshold
+                final_threshold = max(base_threshold, dynamic_threshold.item())
+                
+                # Select positive anchors
+                quality_mask = ious > final_threshold
+                positive_mask = center_mask & quality_mask
+                
+                if positive_mask.any():
+                    matched_labels[positive_mask] = target_labels[target_idx]
+                    matched_boxes[positive_mask] = target_box
+                    
+                    if self.training and hasattr(self, 'verbose') and self.verbose:
+                        num_positives = positive_mask.sum().item()
+                        print(f"\nMatching Stats for target {target_idx}:")
+                        print(f"Center anchors: {center_mask.sum().item()}")
+                        print(f"Quality anchors: {quality_mask.sum().item()}")
+                        print(f"Final positives: {num_positives}")
+                        print(f"Mean IoU: {ious[positive_mask].mean().item():.4f}")
         
         return matched_labels, matched_boxes
 
@@ -240,38 +279,94 @@ class DetectionHead(nn.Module):
         return self.cls_criterion(pred_scores.squeeze(-1), final_labels)
 
     def box_loss(self, pred_boxes, target_boxes, target_labels):
-        """Box regression loss with proper anchor matching."""
+        """Box regression loss with scale normalization."""
         batch_size = pred_boxes[0].shape[0]
         device = pred_boxes[0].device
         
-        # Process predictions from each FPN level
+        # Process predictions
         all_boxes = []
         for level_boxes in pred_boxes:
-            # level_boxes shape: [B, num_anchors, 4, H, W]
             B, num_anchors, box_dim, H, W = level_boxes.shape
-            # Reshape to [B, H*W*num_anchors, 4]
             level_boxes = level_boxes.permute(0, 1, 3, 4, 2).reshape(B, -1, box_dim)
             all_boxes.append(level_boxes)
         
-        # Combine predictions from all levels
-        pred_boxes = torch.cat(all_boxes, dim=1)  # [B, total_anchors, 4]
+        pred_boxes = torch.cat(all_boxes, dim=1)
+        all_anchors = torch.cat(self.last_anchors, dim=0).to(device)
         
-        # Initialize tensors with known size
-        final_boxes = torch.zeros((batch_size, self.total_anchors, 4), device=device)
-        valid_mask = torch.zeros((batch_size, self.total_anchors), device=device)
+        total_positives = 0
+        total_loss = torch.tensor(0.0, device=device)
         
-        # Match anchors for each image
         for b in range(batch_size):
             matched_labels, matched_boxes = self.match_anchors_to_targets(
                 self.last_anchors,
                 target_boxes[b],
                 target_labels[b]
             )
-            final_boxes[b, :len(matched_boxes)] = matched_boxes
-            valid_mask[b, :len(matched_labels)] = matched_labels
+            
+            positive_mask = matched_labels > 0
+            num_positives = positive_mask.sum().item()
+            
+            if num_positives > 0:
+                # Get positive samples
+                pos_pred_boxes = pred_boxes[b, positive_mask]
+                pos_target_boxes = matched_boxes[positive_mask]
+                pos_anchors = all_anchors[positive_mask]
+                
+                # Normalize coordinates by image size
+                img_size = 800.0  # Assuming square images
+                pos_pred_boxes = pos_pred_boxes / img_size
+                pos_target_boxes = pos_target_boxes / img_size
+                pos_anchors = pos_anchors / img_size
+                
+                # Compute relative offsets
+                pred_ctr_x = (pos_pred_boxes[:, 0] + pos_pred_boxes[:, 2]) * 0.5
+                pred_ctr_y = (pos_pred_boxes[:, 1] + pos_pred_boxes[:, 3]) * 0.5
+                pred_w = pos_pred_boxes[:, 2] - pos_pred_boxes[:, 0]
+                pred_h = pos_pred_boxes[:, 3] - pos_pred_boxes[:, 1]
+                
+                gt_ctr_x = (pos_target_boxes[:, 0] + pos_target_boxes[:, 2]) * 0.5
+                gt_ctr_y = (pos_target_boxes[:, 1] + pos_target_boxes[:, 3]) * 0.5
+                gt_w = pos_target_boxes[:, 2] - pos_target_boxes[:, 0]
+                gt_h = pos_target_boxes[:, 3] - pos_target_boxes[:, 1]
+                
+                # Compute loss on normalized coordinates
+                loss_x = F.smooth_l1_loss(pred_ctr_x, gt_ctr_x, reduction='sum')
+                loss_y = F.smooth_l1_loss(pred_ctr_y, gt_ctr_y, reduction='sum')
+                loss_w = F.smooth_l1_loss(pred_w, gt_w, reduction='sum')
+                loss_h = F.smooth_l1_loss(pred_h, gt_h, reduction='sum')
+                
+                box_loss = (loss_x + loss_y + loss_w + loss_h) / 4.0
+                
+                if self.training and hasattr(self, 'verbose') and self.verbose:
+                    print(f"\nBox Loss Components (batch {b}):")
+                    print(f"x: {loss_x.item():.4f}, y: {loss_y.item():.4f}")
+                    print(f"w: {loss_w.item():.4f}, h: {loss_h.item():.4f}")
+                
+                total_loss += box_loss
+                total_positives += num_positives
         
-        # Calculate loss only for positive anchors
-        box_loss = self.box_criterion(pred_boxes, final_boxes)
-        box_loss = (box_loss * valid_mask.unsqueeze(-1)).sum() / (valid_mask.sum() + 1e-6)
+        # Return normalized loss
+        return total_loss / (total_positives + 1e-8)
+
+    def assign_targets(self, anchors, target_boxes, target_labels):
+        """Quality-aware target assignment."""
+        # Compute IoU matrix
+        ious = box_iou(anchors, target_boxes)  # [num_anchors, num_targets]
         
-        return box_loss 
+        # Get highest quality match for each anchor
+        max_iou_per_anchor, matched_targets = ious.max(dim=1)
+        
+        # Get highest quality match for each target
+        max_iou_per_target, matched_anchors = ious.max(dim=0)
+        
+        # Ensure each target has at least one positive anchor
+        for target_idx in range(len(target_boxes)):
+            best_anchor_idx = matched_anchors[target_idx]
+            matched_targets[best_anchor_idx] = target_idx
+            max_iou_per_anchor[best_anchor_idx] = max_iou_per_target[target_idx]
+        
+        # Assign labels based on IoU quality
+        labels = torch.zeros_like(matched_targets)
+        labels[max_iou_per_anchor > self.iou_threshold] = 1
+        
+        return labels, matched_targets 
