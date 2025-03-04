@@ -1,84 +1,86 @@
-# SKU-110K Dataset Configuration
+# SKU-110K Dataset Configuration.
 dataset:
-  path: "datasets/SKU-110K"          # Root directory of the dataset
-  train_path: "images/train"         # Path to training images
-  val_path: "images/val"             # Path to validation images
-  test_path: "images/test"           # Path to test images
-  annotations_path: "annotations"     # Path to annotation files
+  path: "datasets/SKU-110K"          # Root Dir.
+  train_path: "images/train"         # Path To Training Images.
+  val_path: "images/val"             # Path To Validation Images.
+  test_path: "images/test"           # Path To Test Images.
+  annotations_path: "annotations"    # Path To Annotation Files.
   
-  # Add test mode settings
-  test_mode: false                  # Enable test mode with minimal data
-  test_samples: 5                    # Number of test samples to use
+  # Test Mode.
+  test_mode: false                  # Enable Test Mode w/ Minimal Data.
+  test_samples: 5                   # Number of Test Samples To Use.
 
-# Add development mode settings
+# Dev Mode Settings.
 dev_mode: true
 dev_samples: {
-  'train': 100,  # Use 100 training images
-  'val': 20      # Use 20 validation images
+  'train': 100,  # Use 100 Training Images.
+  'val': 20      # Use 20 Validation Images.
 }
 
-# Data Processing Parameters
+# Data Processing Parameters.
 preprocessing:
-  image_size: [640, 640]          # Input image dimensions [height, width]
-  batch_size: 4                   # Smaller batch size
-  num_workers: 1                 # Fewer workers
+  image_size: [640, 640]         # Input Image Dimensions [Height, Width].
+  batch_size: 4                  # Smaller Batch Size.
+  num_workers: 1                 # Fewer Workers.
 
-# Model Architecture Configuration
+# Model Architecture Configuration.
 model:
   pretrained_backbone: true
   backbone: "resnet50"
-  num_classes: 1  # Only detecting objects, no classification
+  fpn_out_channels: 256         # Number of Output Channels for FPN.
+  num_classes: 1                # Number of Classes.
+  num_anchors: 6                # Number of Anchors.
   vit:
-    patch_size: 16                # Size of image patches for ViT
-    num_heads: 8                  # Number of attention heads
-    mlp_dim: 2048                # Dimension of MLP layer in transformer
-    num_layers: 6                # Number of transformer layers
-    hidden_dim: 768              # Dimension of transformer features
-    dropout: 0.1                 # Dropout rate for regularization
+    patch_size: 16               # Size of Image Patches for ViT.
+    num_heads: 8                 # Number of Attention Heads.
+    mlp_dim: 2048                # Dimension of MLP Layer in Transformer.
+    num_layers: 6                # Number of Transformer Layers.
+    hidden_dim: 768              # Dimension of Transformer Features.
+    dropout: 0.1                 # Dropout Rate for Regularization.
 
-# Training Configuration
+# Training Configuration.
 training:
-  epochs: 100                     # Total number of training epochs
-  learning_rate: 0.0005          # Initial learning rate
-  weight_decay: 0.00001           # L2 regularization factor
-  warmup_epochs: 5               # Number of warmup epochs
-  optimizer: "adamw"             # Optimizer type
-  mixed_precision: true          # Whether to use mixed precision training
-  save_dir: "models"             # Directory to save model checkpoints
+  epochs: 100                     # Total Number of Training Epochs.
+  learning_rate: 0.0005           # Initial Learning Rate.
+  weight_decay: 0.00001           # L2 Regularization Factor.
+  warmup_epochs: 5                # Number of Warmup Epochs.
+  optimizer: "adamw"              # Optimizer Type.
+  mixed_precision: true           # Whether to Use Mixed Precision Training.
+  save_dir: "models"              # Directory to Save Model Checkpoints.
   
-  # Incremental training settings
-  resume_from_checkpoint: true    # Whether to resume from checkpoint
-  max_epochs: 100                 # Total epochs to train
-  epochs_per_stage: 5             # Epochs to train before validation
-  early_stopping_patience: 5      # Epochs to wait before early stopping
+  # Incremental Training Settings.
+  resume_from_checkpoint: true    # Whether to Resume from Checkpoint.
+  max_epochs: 100                 # Total Epochs to Train.
+  epochs_per_stage: 5             # Epochs to Train Before Validation.
+  early_stopping_patience: 5      # Epochs to Wait Before Early Stopping.
   
-  # Learning rate scheduling
+  # Learning Rate Scheduling.
   lr_schedule:
-    initial_lr: 0.001
-    min_lr: 0.00001
-    patience: 3                   # Epochs before reducing LR
-    reduction_factor: 0.5        # Factor to reduce LR by
+    initial_lr: 0.001            # Initial Learning Rate.
+    min_lr: 0.00001              # Minimum Learning Rate.
+    patience: 3                  # Epochs Before Reducing LR.
+    reduction_factor: 0.5        # Factor to Reduce LR By.
     
-  # Validation settings
-  validation_frequency: 1         # Epochs between validations
+  # Validation Settings.
+  validation_frequency: 1        # Epochs Between Validations.
 
-# Evaluation Parameters
+# Evaluation Parameters.
 evaluation:
-  conf_threshold: 0.5            # Confidence threshold for object detection
-  iou_threshold: 0.5             # IoU threshold for matching predictions with ground truth
+  conf_threshold: 0.5            # Confidence Threshold for Object Detection.
+  iou_threshold: 0.5             # IoU Threshold for Matching Predictions with Ground Truth.
   
-# Logging Configuration
+# Logging Configuration.
 logging:
-  log_dir: "results/logs"        # Directory for tensorboard logs
-  save_frequency: 5              # Epoch interval for saving checkpoints
-  checkpoint_frequency: 5         # Epochs between checkpoints
-  save_optimizer_state: true     # Whether to save optimizer state
+  log_dir: "results/logs"         # Directory for Tensorboard Logs.
+  save_frequency: 5               # Epoch Interval for Saving Checkpoints.
+  checkpoint_frequency: 5         # Epochs Between Checkpoints.
+  save_optimizer_state: true      # Whether to Save Optimizer State.
   visualization:
     enabled: true
-    batch_frequency: 100    # Reduced frequency to avoid too many plots
-    save_plots: true      # Save metric plots 
+    batch_frequency: 100          # Reduced Frequency to Avoid Too Many Plots.
+    save_plots: true              # Save Metric Plots.
 
-# Add error handling settings
-skip_missing_images: true
-report_missing: true
-min_valid_images: 100  # Minimum number of valid images required 
+# Error Handling Settings.
+skip_missing_images: true         # Skip Missing Images.
+report_missing: true              # Report Missing Images.
+min_valid_images: 100             # Minimum Number of Valid Images Required.

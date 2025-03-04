@@ -1,7 +1,7 @@
 import torch
 import yaml
 from pathlib import Path
-from detector import build_detector
+from .detector import build_detector
 
 def verify_feature_maps(features, input_size):
     """Verify feature maps are suitable for object detection"""
@@ -25,7 +25,8 @@ def test_detector():
     config_path = Path('config/config.yaml')
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    
+
+
     # Test with different input sizes
     test_sizes = [(640, 640), (800, 800)]
     
@@ -33,7 +34,7 @@ def test_detector():
         print(f"\nTesting with input size: ({height}, {width})")
         x = torch.randn(2, 3, height, width)
         
-        model = build_detector(config)
+        model = build_detector(config['model'])
         model.eval()
         
         with torch.no_grad():

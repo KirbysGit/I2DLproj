@@ -1,18 +1,28 @@
-# Training configuration
-model:
-  pretrained_backbone: true
-  fpn_out_channels: 256
-  num_classes: 1
-  num_anchors: 6
+# Training Configuration.
 
+# Used for full training.
+
+# Model Configuration.
+model:
+  pretrained_backbone: true   # Whether to Use Pretrained Backbone.
+  fpn_out_channels: 256       # Number of Output Channels for FPN.
+  num_classes: 1              # Number of Classes.
+  num_anchors: 6              # Number of Anchors.
+
+# Training Configuration.
 training:
-  batch_size: 8
-  num_workers: 4
-  learning_rate: 0.0001
-  weight_decay: 0.0001
-  epochs: 100
-  save_freq: 5
-  grad_clip: 1.0
-  save_dir: 'checkpoints'
-  use_wandb: false  # Set to true if using wandb
-  project_name: 'sku-detection' 
+  batch_size: 8                     # Batch Size.
+  num_workers: 4                    # Number of Workers.
+  learning_rate: 0.0001             # Learning Rate.
+  weight_decay: 0.0001              # Weight Decay.
+  epochs: 100                       # Number of Epochs.
+  save_freq: 5                      # Save Frequency.
+  grad_clip: 1.0                    # Gradient Clipping.
+  save_dir: 'checkpoints'           # Save Directory.
+  use_wandb: false                  # Whether to Use Weights and Biases.
+  project_name: 'sku-detection'     # Project Name.
+
+# Evaluation Parameters.
+evaluation:
+  conf_threshold: 0.5            # Confidence Threshold for Object Detection.
+  iou_threshold: 0.5             # IoU Threshold for Matching Predictions with Ground Truth.

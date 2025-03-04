@@ -1,5 +1,5 @@
 import torch
-from detection_head import DetectionHead
+from .detection_head import DetectionHead
 
 def test_detection_head():
     """Test DetectionHead implementation"""
@@ -12,7 +12,7 @@ def test_detection_head():
     
     features = {
         f'p{i}': torch.randn(batch_size, fpn_channels, h, w)
-        for i, (h, w) in enumerate(feature_sizes)
+        for i, (h, w) in enumerate(feature_sizes, start=2)  # Start from p2
     }
     
     # Initialize detection head
@@ -25,6 +25,7 @@ def test_detection_head():
     
     # Forward pass
     with torch.no_grad():
+        print("Features received by DetectionHead:", features.keys())
         predictions = head(features)
     
     # Verify output
@@ -33,7 +34,7 @@ def test_detection_head():
         predictions['cls_scores'], 
         predictions['bbox_preds']
     )):
-        print(f"\nFeature Level {i}:")
+        print(f"\nFeature Level P{i+2}:")  # Update level reporting
         print(f"  Feature map size: {feature_sizes[i]}")
         print(f"  Classification shape: {tuple(cls_score.shape)}")
         print(f"  Box prediction shape: {tuple(bbox_pred.shape)}")

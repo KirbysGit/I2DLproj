@@ -1,5 +1,5 @@
 import torch
-from fpn import FeaturePyramidNetwork
+from .fpn import FeaturePyramidNetwork
 
 def test_fpn():
     """Test FPN implementation"""
@@ -29,6 +29,8 @@ def test_fpn():
     # Forward pass
     with torch.no_grad():
         fpn_features = fpn(features)
+        
+    original_layer_map = {'p2': 'layer1', 'p3': 'layer2', 'p4': 'layer3', 'p5': 'layer4'}
     
     # Verify output
     print("\nFPN Output Feature Maps:")
@@ -43,7 +45,7 @@ def test_fpn():
             f"Expected {out_channels} channels, got {feat.shape[1]}"
         
         # Verify spatial dimensions match input
-        assert feat.shape[-2:] == features[name].shape[-2:], \
+        assert feat.shape[-2:] == features[original_layer_map[name]].shape[-2:], \
             f"Spatial dimensions changed for {name}"
     
     print("\nAll tests passed!")

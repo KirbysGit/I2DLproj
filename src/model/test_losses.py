@@ -1,5 +1,5 @@
 import torch
-from losses import FocalLoss, IoULoss, DetectionLoss
+from .losses import FocalLoss, IoULoss, DetectionLoss
 
 def test_focal_loss():
     """Test Focal Loss implementation"""
