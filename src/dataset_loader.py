@@ -1,3 +1,10 @@
+# dataset_loader.py
+
+# -----
+# Loads and processes the SKU-110K dataset.
+# -----
+
+# Imports.
 import os
 import cv2
 import numpy as np
@@ -7,42 +14,44 @@ import albumentations as A
 import torch
 from pathlib import Path
 
-
+# SKU-110K Dataset Class.
 class SKU110KDataset(Dataset):
     """
-    PyTorch Dataset class for SKU-110K retail product detection dataset.
-    Handles loading of images and annotations, and applies transformations.
+    PyTorch Dataset class for SKU-110K Retail Product Detection Dataset.
+    Handles loading of Images & Annotations, and Applies Transformations.
     """
     
     def __init__(self, config, split='train', transform=None):
         """
-        Initialize dataset with configuration and split
+        Initialize Dataset with Configuration and Split.
+
         Args:
-            config (dict): Configuration dictionary with dataset paths and parameters
-            split (str): Dataset split - 'train', 'val', or 'test'
-            transform: Optional custom transform pipeline
+            config (dict):  Configuration dictionary with dataset paths and parameters.
+            split (str):    Dataset split - 'train', 'val', or 'test'.
+            transform:      Optional custom transform pipeline.
         """
+
+        # Initialize Dataset.
         self.config = config
         self.split = split
         self.transform = transform or self._get_transforms()
     
-        
-        # Setup paths
+        # Setup Paths.
         dataset_path = Path(config['dataset']['path'])
         self.image_dir = dataset_path / config['dataset'][f'{split}_path']
         annotations_path = dataset_path / config['dataset']['annotations_path']
         
-        # Add data verification step
+        # Add Data Verification Step.
         self._verify_dataset_structure(dataset_path, annotations_path)
         
-        # Load annotations with validation
+        # Load Annotations with Validation.
         ann_file = annotations_path / f'annotations_{split}.csv'
         self.annotations = self._load_and_validate_annotations(ann_file)
         
-        # Add class mapping
+        # Add Class Mapping.
         self.class_to_idx = {'object': 0}  # Map class names to indices
         
-        # Validate class labels
+        # Validate Class Labels.
         unique_classes = self.annotations['class'].unique()
         unknown_classes = [cls for cls in unique_classes if cls not in self.class_to_idx]
         if unknown_classes:
@@ -51,10 +60,11 @@ class SKU110KDataset(Dataset):
         print(f"Found classes: {unique_classes}")
         print(f"Class mapping: {self.class_to_idx}")
         
-        # Group by image
+        # Group by Image.
         self.image_groups = self.annotations.groupby('image_name')
         self.image_names = list(self.image_groups.groups.keys())
         
+        # Test Mode.
         if config['dataset'].get('test_mode', False):
             print("- Test mode enabled")
             self.image_names = self.image_names[:config['dataset']['test_samples']]
@@ -62,19 +72,19 @@ class SKU110KDataset(Dataset):
         
         print(f"- Total images: {len(self.image_names)}")
         
-        # Filter annotations to only include valid images
+        # Filter Annotations to Only Include Valid Images.
         self.annotations = self.annotations[
             self.annotations['image_name'].isin(self.image_names)
         ]
         
-        # Add caching for transformed images
+        # Add Caching for Transformed Images.
         self.cache = {}
         self.cache_size = config.get('dataset', {}).get('cache_size', 100)
         
-        # Check directory structure
+        # Check Directory Structure.
         self.image_dir = dataset_path / config['dataset'][f'{split}_path']
         
-        # Verify directories exist
+        # Verify Directories Exist.
         print("\nChecking directory structure:")
         print(f"Dataset root exists: {dataset_path.exists()}")
         print(f"Images directory exists: {self.image_dir.exists()}")
@@ -85,71 +95,84 @@ class SKU110KDataset(Dataset):
             print("Image directory not found!")
             print(f"Expected path: {self.image_dir}")
         
-        # Apply sample limits based on mode
+        # Apply Sample Limits Based on Mode.
         if config['dataset'].get('custom_mode', False):
             num_samples = config['dataset']['custom_samples'][split]
             self.image_names = self.image_names[:num_samples]
             print(f"Using {num_samples} images for {split} in custom mode")
 
+    # Verify Dataset Structure. 
     def _verify_dataset_structure(self, dataset_path, annotations_path):
-        """Verify the dataset structure and files exist"""
+        """Verify the Dataset Structure & Files Exist."""
+
+        # Verify Dataset Path.
         if not dataset_path.exists():
             raise RuntimeError(f"Dataset path does not exist: {dataset_path}")
             
         if not self.image_dir.exists():
             raise RuntimeError(f"Image directory does not exist: {self.image_dir}")
-            
+
+        # Verify Annotations Path.
         if not annotations_path.exists():
             raise RuntimeError(f"Annotations path does not exist: {annotations_path}")
             
-        # Print dataset statistics
+        # Print Dataset Statistics.
         print(f"\nDataset Structure Verification:")
         print(f"- Dataset root: {dataset_path}")
         print(f"- Images path: {self.image_dir}")
         print(f"- Annotations path: {annotations_path}")
 
+    # Load and Validate Annotations.
     def _load_and_validate_annotations(self, ann_file):
         """Load and validate annotations file"""
         if not ann_file.exists():
             raise RuntimeError(f"Annotations file not found: {ann_file}")
             
-        # Load annotations
+        # Load Annotations.
         column_names = ['image_name', 'x1', 'y1', 'x2', 'y2', 'class', 'width', 'height']
         annotations = pd.read_csv(ann_file, names=column_names, header=None)
         
-        # Validate annotations
+        # Validate Annotations.
         self._validate_annotations(annotations)
         
         return annotations
-        
+    
+    # Validate Annotations.
     def _validate_annotations(self, annotations):
-        """Validate annotation format and content"""
+        """Validate Annotation Format and Content."""
+
+        # Validate Required Columns.
         required_columns = ['image_name', 'x1', 'y1', 'x2', 'y2', 'class']
         missing_columns = [col for col in required_columns if col not in annotations.columns]
         
+        # Raise Error if Missing Columns.
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
             
-        # Validate coordinate values
+        # Validate Coordinate Values.
         invalid_coords = (
             (annotations['x1'] >= annotations['x2']) |
             (annotations['y1'] >= annotations['y2']) |
             (annotations[['x1', 'x2', 'y1', 'y2']] < 0).any(axis=1)
         )
-        
+
+        # Print Error if Invalid Coordinates.
         if invalid_coords.any():
             print(f"Found {invalid_coords.sum()} invalid bounding boxes")
             print("First few invalid annotations:")
             print(annotations[invalid_coords].head())
             
-        # Print annotation statistics
+        # Print Annotation Statistics.
         print(f"\nAnnotation Statistics:")
         print(f"- Total annotations: {len(annotations)}")
         print(f"- Unique images: {annotations['image_name'].nunique()}")
         print(f"- Average boxes per image: {len(annotations) / annotations['image_name'].nunique():.2f}")
 
+    # Get Data Augmentation Transforms.
     def _get_transforms(self):
-        """Get data augmentation transforms"""
+        """Get Data Augmentation Transforms."""
+
+        # Define Transforms.
         return A.Compose([
             A.Normalize(
                 mean=[0.485, 0.456, 0.406],
@@ -163,24 +186,30 @@ class SKU110KDataset(Dataset):
             label_fields=['class_labels']
         ))
 
+    # Create Test Data.
     def _create_test_data(self):
-        """Create dummy data for testing"""
+        """Create Dummy Data for Testing."""
+
+        # Create Images Directory.
         os.makedirs(self.images_path, exist_ok=True)
         
-        # Create a few dummy images
+        # Create a Few Dummy Images.
         num_samples = self.config['dataset'].get('test_samples', 5)
         for i in range(num_samples):
             img = np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8)
             img_path = os.path.join(self.images_path, f'test_image_{i}.jpg')
             cv2.imwrite(img_path, img)
 
+    # Create Test Annotations.
     def _create_test_annotations(self):
-        """Create dummy annotations for testing"""
+        """Create Dummy Annotations for Testing."""
+
+        # Create Annotations List.
         annotations = []
         num_samples = self.config['dataset'].get('test_samples', 5)
         
+        # Create Random Boxes for Each Image.
         for i in range(num_samples):
-            # Create random boxes for each image
             num_boxes = np.random.randint(1, 5)
             for _ in range(num_boxes):
                 x1 = np.random.randint(0, 500)
@@ -199,20 +228,27 @@ class SKU110KDataset(Dataset):
         
         self.annotations = pd.DataFrame(annotations)
 
+    # Get Length of Dataset.
     def __len__(self):
-        """Return the total number of images in the dataset"""
+        """Return the Total Number of Images in the Dataset."""
         return len(self.image_names)
 
+    # Get Item from Dataset.
     def __getitem__(self, idx):
-        """Get a single sample from the dataset with validation"""
+        """Get a Single Sample from the Dataset with Validation."""
+
+        # Check Cache.
         if idx in self.cache:
             return self.cache[idx]
         
         try:
+            # Get Image Name.
             image_name = self.image_names[idx]
+
+            # Get Image Annotations.
             image_anns = self.image_groups.get_group(image_name)
             
-            # Load and validate image
+            # Load and Validate Image.
             image_path = self.image_dir / image_name
             image = cv2.imread(str(image_path))
             
@@ -222,7 +258,7 @@ class SKU110KDataset(Dataset):
             if image.size == 0:
                 raise ValueError(f"Empty image: {image_path}")
             
-            # Verify image dimensions are reasonable
+            # Verify Image Dimensions are Reasonable.
             if image.shape[0] > 4000 or image.shape[1] > 4000:
                 print(f"Warning: Large image detected: {image.shape}")
                 # Resize large images to reasonable dimensions while maintaining aspect ratio
@@ -232,45 +268,45 @@ class SKU110KDataset(Dataset):
             
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            # Get original dimensions and target size
+            # Get Original Dimensions and Target Size.
             orig_height, orig_width = image.shape[:2]
             target_size = self.config['preprocessing']['image_size']
             
-            # Calculate resize scale while preserving aspect ratio
+            # Calculate Resize Scale While Preserving Aspect Ratio.
             scale = min(target_size[0] / orig_height, target_size[1] / orig_width)
             
-            # Resize image
+            # Resize Image.
             new_height = int(orig_height * scale)
             new_width = int(orig_width * scale)
             resized_image = cv2.resize(image, (new_width, new_height))
             
-            # Create padded image
+            # Create Padded Image.
             padded_image = np.zeros((target_size[0], target_size[1], 3), dtype=np.uint8)
             pad_y = (target_size[0] - new_height) // 2
             pad_x = (target_size[1] - new_width) // 2
             padded_image[pad_y:pad_y+new_height, pad_x:pad_x+new_width] = resized_image
             
-            # Extract and transform box coordinates
+            # Extract and Transform Box Coordinates.
             boxes = image_anns[['x1', 'y1', 'x2', 'y2']].values.astype(np.float32)
             
-            # Scale coordinates
-            boxes = boxes * scale
+            # Scale Coordinates.
+            img_width, img_height = image_anns['image_width'].values[0], image_anns['image_height'].values[0]
             
-            # Add padding offset
+            # Add Padding Offset.
             boxes[:, [0, 2]] += pad_x
             boxes[:, [1, 3]] += pad_y
             
-            # Normalize to [0, 1] range
+            # Normalize to [0, 1] Range.
             boxes[:, [0, 2]] /= target_size[1]
             boxes[:, [1, 3]] /= target_size[0]
             
-            # Clip boxes to valid range
+            # Clip Boxes to Valid Range.
             boxes = np.clip(boxes, 0, 1)
             
-            # Convert class labels
+            # Convert Class Labels.
             class_labels = np.array([self.class_to_idx[label] for label in image_anns['class'].values])
             
-            # Apply normalization transform
+            # Apply Normalization Transform.
             if self.transform:
                 transformed = self.transform(
                     image=padded_image,
@@ -281,7 +317,7 @@ class SKU110KDataset(Dataset):
                 boxes = np.array(transformed['bboxes'])
                 class_labels = np.array(transformed['class_labels'])
             
-            # Convert to tensor format
+            # Convert to Tensor Format.
             image = torch.from_numpy(np.transpose(padded_image, (2, 0, 1)))
             boxes = torch.from_numpy(boxes.astype(np.float32))
             class_labels = torch.from_numpy(class_labels)
@@ -293,7 +329,7 @@ class SKU110KDataset(Dataset):
                 'image_name': image_name
             }
             
-            # Cache the result
+            # Cache the Result.
             if len(self.cache) < self.cache_size:
                 self.cache[idx] = result
             
@@ -304,36 +340,39 @@ class SKU110KDataset(Dataset):
             return self.__getitem__((idx + 1) % len(self))
 
     def process_ground_truth(self, boxes, image_size=(640, 640)):
-        """Convert ground truth boxes to grid format"""
+        """Convert Ground Truth Boxes to Grid Format."""
+
+        # Define Grid Size.
         grid_size = (20, 20)
         grid_h, grid_w = grid_size
         
-        # Initialize target tensors
+        # Initialize Target Tensors.
         obj_targets = torch.zeros(grid_h, grid_w)
         box_targets = torch.zeros(grid_h, grid_w, 4)
         
-        # Normalize boxes to [0,1] range if not already
+        # Normalize Boxes to [0,1] Range if Not Already.
         if boxes.max() > 1:
             boxes = boxes / np.array([image_size[1], image_size[0], image_size[1], image_size[0]])
         
-        # Convert boxes to grid cells
+        # Convert Boxes to Grid Cells.
         for box in boxes:
             x1, y1, x2, y2 = box
             
-            # Calculate box center
+            # Calculate Box Center.
             cx = (x1 + x2) / 2
             cy = (y1 + y2) / 2
             
-            # Convert to grid coordinates
+            # Convert to Grid Coordinates.
             grid_x = int(cx * grid_w)
             grid_y = int(cy * grid_h)
             
-            # Ensure grid coordinates are within bounds
+            # Ensure Grid Coordinates are Within Bounds.
             grid_x = min(max(grid_x, 0), grid_w - 1)
             grid_y = min(max(grid_y, 0), grid_h - 1)
             
-            # Set targets
+            # Set Targets.
             obj_targets[grid_y, grid_x] = 1
             box_targets[grid_y, grid_x] = torch.tensor([x1, y1, x2, y2])
         
+        # Return Targets.
         return obj_targets, box_targets

@@ -23,7 +23,8 @@ class ObjectDetector(nn.Module):
                  pretrained_backbone=True,
                  fpn_out_channels=256,
                  num_classes=1,
-                 num_anchors=6):
+                 num_anchors=6,
+                 debug=False):
         super().__init__()
         
         # Backbone.
@@ -42,7 +43,8 @@ class ObjectDetector(nn.Module):
         self.detection_head = DetectionHead(
             in_channels=fpn_out_channels,
             num_anchors=num_anchors,
-            num_classes=num_classes
+            num_classes=num_classes,
+            debug=debug
         )
     
     # Forward Pass.
@@ -146,7 +148,8 @@ def build_detector(config):
         pretrained_backbone=config['pretrained_backbone'],
         fpn_out_channels=config['fpn_out_channels'],
         num_classes=config['num_classes'],
-        num_anchors=config['num_anchors']
+        num_anchors=config['num_anchors'],
+        debug=config.get('debug', False)  # Get debug setting from config
     )
     
     return detector

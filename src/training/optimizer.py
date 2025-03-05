@@ -1,43 +1,54 @@
+# training/optimizer.py
+
+# -----
+
+# Creates an Optimizer that helps train Model by Updating Parameters.
+
+# -----
+
+# Imports.
 import torch.optim as optim
 
+# Optimizer Builder Class.
 class OptimizerBuilder:
-    """Builds and configures optimizer with proper parameters and weight decay."""
+    """Builds and configures Optimizer w/ Proper Parameters & Weight Decay."""
     
     @staticmethod
     def build(model, config):
         """
-        Build optimizer with parameter groups and weight decay.
+        Build Optimizer w/ Parameter Groups & Weight Decay.
         
         Args:
-            model: The model to optimize
-            config: Dictionary containing optimizer configuration
+            model: The model to optimize.
+            config: Dictionary containing optimizer configuration.
                 - optimizer_type: 'adam', 'sgd', etc.
-                - learning_rate: Base learning rate
-                - weight_decay: Weight decay factor
-                - momentum: Momentum factor (for SGD)
+                - learning_rate: Base learning rate.
+                - weight_decay: Weight decay factor.
+                - momentum: Momentum factor (for SGD).
         """
-        # Separate parameters into with and without weight decay
+        # Separate Parameters into Groups.
         decay = set()
         no_decay = set()
         
+        # Iterate Over Parameters.
         for name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
             
-            # Skip batch norm and biases for weight decay
+            # Skip Batch Norm & Biases for Weight Decay.
             if len(param.shape) == 1 or name.endswith(".bias"):
                 no_decay.add(name)
             else:
                 decay.add(name)
         
-        # Validate parameters
+        # Validate Parameters.
         param_dict = {name: param for name, param in model.named_parameters()}
         inter_params = decay & no_decay
         union_params = decay | no_decay
         assert len(inter_params) == 0, f"Parameters {inter_params} made it into both decay/no_decay sets!"
         assert len(param_dict.keys() - union_params) == 0, f"Parameters {param_dict.keys() - union_params} were not separated into decay/no_decay set!"
         
-        # Create optimizer groups
+        # Create Optimizer Groups.
         optim_groups = [
             {
                 "params": [param_dict[name] for name in sorted(decay)],
@@ -49,7 +60,7 @@ class OptimizerBuilder:
             }
         ]
         
-        # Initialize optimizer
+        # Initialize Optimizer.
         optimizer_type = config.get('optimizer_type', 'adam').lower()
         if optimizer_type == 'adam':
             optimizer = optim.Adam(
@@ -66,4 +77,5 @@ class OptimizerBuilder:
         else:
             raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
         
+        # Return Optimizer.
         return optimizer 

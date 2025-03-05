@@ -1,5 +1,5 @@
 import torch
-from backbone import ResNetBackbone
+from .backbone import ResNetBackbone
 
 def test_backbone():
     """Test the ResNetBackbone implementation"""

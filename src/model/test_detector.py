@@ -20,9 +20,12 @@ def verify_feature_maps(features, input_size):
 def test_detector():
     """Test the complete ObjectDetector implementation"""
     print("\nTesting Complete Object Detector...")
-    
-    # Load config
-    config_path = Path('config/config.yaml')
+
+
+    # Correct relative path inside src/
+    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
+
+    # Load Config.
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 

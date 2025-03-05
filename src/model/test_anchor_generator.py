@@ -5,7 +5,7 @@ import numpy as np
 
 def test_anchor_generator():
     """Test the AnchorGenerator implementation"""
-    from anchor_generator import AnchorGenerator
+    from .anchor_generator import AnchorGenerator
     
     print("\nTesting Anchor Generator...")
     

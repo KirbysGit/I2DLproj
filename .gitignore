@@ -78,6 +78,7 @@ Thumbs.db
 test_*.jpg
 test_*.png
 test_*.json
+test_*.py
 
 # Temporary files
 tmp/

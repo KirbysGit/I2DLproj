@@ -3,10 +3,9 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 import logging
 from tqdm import tqdm
-import wandb  # For experiment tracking
-from utils.visualization import DetectionVisualizer
-from utils.box_ops import box_iou
-from utils.metrics import DetectionMetrics
+from src.utils.visualization import DetectionVisualizer
+from src.utils.box_ops import box_iou
+from src.utils.metrics import DetectionMetrics
 
 
 class Trainer:
@@ -75,15 +74,11 @@ class Trainer:
         self.save_dir = Path(config['save_dir'])
         self.save_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize wandb
-        if config['use_wandb']:
-            wandb.init(project=config['project_name'])
-            wandb.config.update(config)
         
         self.visualizer = DetectionVisualizer()
     
     def train_epoch(self, epoch):
-        """Train for one epoch with better formatting."""
+        """Train for one epoch with better formatting and error handling."""
         self.model.train()
         total_loss = 0
         total_cls_loss = 0
@@ -95,81 +90,109 @@ class Trainer:
         
         with tqdm(self.train_loader, desc=f'Training') as pbar:
             for batch_idx, batch in enumerate(pbar):
-                # Move data to device
-                images = batch['images'].to(self.device)
-                boxes = batch['boxes'].to(self.device)
-                labels = batch['labels'].to(self.device)
-                
-                # Debug info
-                if self.config.get('verbose', False) and batch_idx == 0:
-                    print(f"\nBatch shapes:")
-                    print(f"Images: {images.shape}")
-                    print(f"Boxes: {boxes.shape}")
-                    print(f"Labels: {labels.shape}")
-                
-                # Forward pass
-                self.optimizer.zero_grad()
-                loss_dict = self.model(images, boxes, labels)
-                
-                # Compute losses
-                losses = sum(loss.mean() if isinstance(loss, (list, tuple)) 
-                            else loss for loss in loss_dict.values())
-                
-                # Track individual losses
-                cls_loss = loss_dict['cls_loss'].mean() if isinstance(loss_dict['cls_loss'], (list, tuple)) \
-                          else loss_dict['cls_loss']
-                box_loss = loss_dict['box_loss'].mean() if isinstance(loss_dict['box_loss'], (list, tuple)) \
-                          else loss_dict['box_loss']
-                
-                total_cls_loss += cls_loss.item()
-                total_box_loss += box_loss.item()
-                total_loss += losses.item()
-                
-                # Debug info
-                if self.config.get('verbose', False) and batch_idx == 0:
-                    print("\nLosses:")
-                    for k, v in loss_dict.items():
-                        print(f"{k}: {v.item():.4f}")
-                
-                # Backward pass
-                losses.backward()
-                
-                # Add gradient clipping
-                if self.config['grad_clip']:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), 
-                        self.config['grad_clip']
-                    )
-                
-                self.optimizer.step()
-                self.scheduler.step()
-                
-                # Update progress bar with cleaner format
-                avg_loss = total_loss / (batch_idx + 1)
-                avg_cls_loss = total_cls_loss / (batch_idx + 1)
-                avg_box_loss = total_box_loss / (batch_idx + 1)
-                
-                pbar.set_postfix({
-                    'Loss': f'{avg_loss:.4f}',
-                    'Cls': f'{avg_cls_loss:.4f}',
-                    'Box': f'{avg_box_loss:.4f}',
-                    'LR': f'{self.scheduler.get_last_lr()[0]:.6f}'
-                })
+                try:
+                    # Move data to device
+                    images = batch['images'].to(self.device)
+                    boxes = batch['boxes'].to(self.device)
+                    labels = batch['labels'].to(self.device)
+                    
+                    # Debug info
+                    if self.config.get('verbose', False) and batch_idx == 0:
+                        print(f"\nBatch shapes:")
+                        print(f"Images: {images.shape}")
+                        print(f"Boxes: {boxes.shape}")
+                        print(f"Labels: {labels.shape}")
+                    
+                    # Forward pass
+                    self.optimizer.zero_grad()
+                    
+                    try:
+                        loss_dict = self.model(images, boxes, labels)
+                    except RuntimeError as e:
+                        print(f"\nError in forward pass: {str(e)}")
+                        if self.config.get('verbose', False):
+                            print(f"Input shapes that caused error:")
+                            print(f"Images: {images.shape}")
+                            print(f"Boxes: {boxes.shape}")
+                            print(f"Labels: {labels.shape}")
+                        raise
+                    
+                    # Compute total loss
+                    if isinstance(loss_dict, dict):
+                        losses = sum(loss.mean() if isinstance(loss, (list, tuple)) 
+                                   else loss for loss in loss_dict.values())
+                        
+                        # Track individual losses
+                        cls_loss = loss_dict.get('cls_loss', 0)
+                        box_loss = loss_dict.get('box_loss', 0)
+                        
+                        if isinstance(cls_loss, (list, tuple)):
+                            cls_loss = sum(l.mean() for l in cls_loss)
+                        if isinstance(box_loss, (list, tuple)):
+                            box_loss = sum(l.mean() for l in box_loss)
+                    else:
+                        losses = loss_dict  # If model returns a single loss value
+                        cls_loss = box_loss = losses / 2  # Split evenly for logging
+                    
+                    # Update running averages
+                    total_cls_loss += cls_loss.item()
+                    total_box_loss += box_loss.item()
+                    total_loss += losses.item()
+                    
+                    # Debug info
+                    if self.config.get('verbose', False) and batch_idx == 0:
+                        print("\nLosses:")
+                        if isinstance(loss_dict, dict):
+                            for k, v in loss_dict.items():
+                                if isinstance(v, (list, tuple)):
+                                    print(f"{k}: {[x.item() for x in v]}")
+                                else:
+                                    print(f"{k}: {v.item():.4f}")
+                        else:
+                            print(f"Total loss: {losses.item():.4f}")
+                    
+                    # Backward pass
+                    losses.backward()
+                    
+                    # Gradient clipping
+                    if self.config['grad_clip']:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(), 
+                            self.config['grad_clip']
+                        )
+                    
+                    self.optimizer.step()
+                    self.scheduler.step()
+                    
+                    # Update progress bar
+                    avg_loss = total_loss / (batch_idx + 1)
+                    avg_cls_loss = total_cls_loss / (batch_idx + 1)
+                    avg_box_loss = total_box_loss / (batch_idx + 1)
+                    
+                    pbar.set_postfix({
+                        'Loss': f'{avg_loss:.4f}',
+                        'Cls': f'{avg_cls_loss:.4f}',
+                        'Box': f'{avg_box_loss:.4f}',
+                        'LR': f'{self.scheduler.get_last_lr()[0]:.6f}'
+                    })
+                    
+                except Exception as e:
+                    print(f"\nError processing batch {batch_idx}: {str(e)}")
+                    if self.config.get('verbose', False):
+                        print("Batch contents:")
+                        for k, v in batch.items():
+                            if isinstance(v, torch.Tensor):
+                                print(f"{k}: shape={v.shape}, dtype={v.dtype}")
+                            else:
+                                print(f"{k}: {type(v)}")
+                    raise
         
-        # Print epoch summary
-        print(f"\nEpoch Summary:")
-        print(f"  Training Loss: {avg_loss:.4f}")
-        print(f"  - Classification: {avg_cls_loss:.4f}")
-        print(f"  - Box Regression: {avg_box_loss:.4f}")
-        
-        # Add quality metrics
+        # Return metrics dictionary
         metrics = {
             'train_loss': avg_loss,
             'cls_loss': avg_cls_loss,
             'box_loss': avg_box_loss,
-            'lr': self.scheduler.get_last_lr()[0],
-            'pos_ratio': matched_labels.sum() / len(matched_labels),
-            'mean_iou': ious[matched_labels > 0].mean().item() if (matched_labels > 0).any() else 0
+            'lr': self.scheduler.get_last_lr()[0]
         }
         
         return metrics
@@ -291,7 +314,11 @@ class Trainer:
             if epoch % self.config['save_freq'] == 0:
                 self.save_checkpoint(epoch, val_loss)
             
-            print(f'Epoch {epoch}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}')
+            print(f"Epoch {epoch}: train_loss={train_loss['train_loss']:.4f}, "
+                f"cls_loss={train_loss['cls_loss']:.4f}, "
+                f"box_loss={train_loss['box_loss']:.4f}, "
+                f"val_loss={val_loss:.4f}")
+
     
     def save_checkpoint(self, epoch, loss, is_best=False):
         """Save model checkpoint."""

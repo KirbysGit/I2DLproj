@@ -1,9 +1,20 @@
+# training/scheduler.py
+
+# -----
+
+# Modifies Learning Rate Dynamically During Training.
+# Consists of Warmup Phase & Cosine Decay Phase.
+
+# -----
+
+# Imports.
 import math
 from torch.optim.lr_scheduler import _LRScheduler
 
+# Warmup Cosine Scheduler Class.
 class WarmupCosineScheduler(_LRScheduler):
     """
-    Learning rate scheduler with warmup and cosine decay.
+    Learning Rate Scheduler w/ Warmup & Cosine Decay.
     """
     
     def __init__(self, 
@@ -14,12 +25,14 @@ class WarmupCosineScheduler(_LRScheduler):
                  eta_min=1e-8):
         """
         Args:
-            optimizer: Optimizer to schedule
-            warmup_epochs: Number of epochs for warmup
-            max_epochs: Total number of epochs
-            warmup_start_lr: Initial learning rate for warmup
-            eta_min: Minimum learning rate
+            optimizer:          Optimizer to schedule.
+            warmup_epochs:      Number of epochs for warmup.
+            max_epochs:         Total number of epochs.
+            warmup_start_lr:    Initial learning rate for warmup.
+            eta_min:            Minimum learning rate.
         """
+
+        # Initialize Scheduler.
         self.warmup_epochs = warmup_epochs
         self.max_epochs = max_epochs
         self.warmup_start_lr = warmup_start_lr
@@ -27,10 +40,12 @@ class WarmupCosineScheduler(_LRScheduler):
         
         super().__init__(optimizer, -1)
     
+    # Get Learning Rate.
     def get_lr(self):
-        """Calculate learning rates based on current epoch."""
+        """Calculate Learning Rates Based on Current Epoch."""
+        
         if self.last_epoch < self.warmup_epochs:
-            # Linear warmup
+            # Linear Warmup.
             alpha = self.last_epoch / self.warmup_epochs
             factor = alpha
         else:
@@ -38,6 +53,7 @@ class WarmupCosineScheduler(_LRScheduler):
             progress = (self.last_epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)
             factor = 0.5 * (1 + math.cos(math.pi * progress))
         
+        # Return Learning Rates.
         return [
             self.warmup_start_lr + (base_lr - self.warmup_start_lr) * factor
             for base_lr in self.base_lrs
