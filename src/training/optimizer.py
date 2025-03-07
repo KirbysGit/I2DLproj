@@ -7,6 +7,7 @@
 # -----
 
 # Imports.
+import torch
 import torch.optim as optim
 
 # Optimizer Builder Class.
@@ -78,4 +79,51 @@ class OptimizerBuilder:
             raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
         
         # Return Optimizer.
-        return optimizer 
+        return optimizer
+
+def build_optimizer(model, config):
+    """Build optimizer for training.
+    
+    Args:
+        model: The model to optimize
+        config: Dictionary containing optimizer configuration
+            - learning_rate: Learning rate
+            - weight_decay: Weight decay factor
+            - optimizer_type: Type of optimizer (default: 'adamw')
+    
+    Returns:
+        torch.optim.Optimizer: The configured optimizer
+    """
+    # Get optimizer parameters
+    lr = float(config.get('learning_rate', 1e-4))
+    weight_decay = float(config.get('weight_decay', 1e-4))
+    optimizer_type = config.get('optimizer_type', 'adamw').lower()
+    
+    # Filter parameters that require gradients
+    parameters = [p for p in model.parameters() if p.requires_grad]
+    
+    # Create optimizer based on type
+    if optimizer_type == 'adam':
+        optimizer = torch.optim.Adam(
+            parameters,
+            lr=lr,
+            weight_decay=weight_decay
+        )
+    elif optimizer_type == 'adamw':
+        optimizer = torch.optim.AdamW(
+            parameters,
+            lr=lr,
+            weight_decay=weight_decay
+        )
+    elif optimizer_type == 'sgd':
+        momentum = float(config.get('momentum', 0.9))
+        optimizer = torch.optim.SGD(
+            parameters,
+            lr=lr,
+            momentum=momentum,
+            weight_decay=weight_decay
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
+    
+    return optimizer 

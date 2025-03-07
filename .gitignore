@@ -1,27 +1,61 @@
-# Datasets
+# Development and Training Artifacts
+training_runs/
+debug_outputs/
+test_outputs/
+evaluation_results/
+checkpoints/
+runs/
+
+# Model and Training Data
 datasets/
 data/
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.tif
-*.csv
-
-# Model weights and checkpoints
 models/
+weights/
 *.pth
 *.pt
 *.ckpt
 *.h5
 *.weights
+*.whl
 
-# Results and logs
-results/
+# Images and Media
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.tif
+*.tiff
+*.bmp
+*.ico
+*.svg
+
+# Data Files
+*.csv
+*.json
+*.xml
+*.yaml
+*.yml
+!config/*.yaml
+!config/*.yml
+
+# Logs and Metrics
 logs/
 wandb/
 tensorboard/
+mlruns/
 *.log
+*.out
+metrics/
+profiling/
+
+# Test and Debug Files
+test_*.py
+debug_*.py
+*_test.py
+*_debug.py
+tests/temp/
+tests/output/
+pytest_cache/
 
 # Python
 __pycache__/
@@ -51,6 +85,8 @@ env/
 ENV/
 retail_analysis_env/
 .env
+.venv
+.python-version
 
 # IDE
 .idea/
@@ -60,6 +96,8 @@ retail_analysis_env/
 .project
 .pydevproject
 .settings/
+*.sublime-project
+*.sublime-workspace
 
 # OS generated files
 .DS_Store
@@ -74,13 +112,21 @@ Thumbs.db
 .ipynb_checkpoints
 *.ipynb
 
-# Test data (generated during testing)
-test_*.jpg
-test_*.png
-test_*.json
-test_*.py
-
 # Temporary files
 tmp/
 temp/
-*.tmp 
+*.tmp
+*.bak
+*.swp
+*~
+
+# Documentation builds
+docs/_build/
+site/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover 

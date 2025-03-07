@@ -55,8 +55,8 @@ class DetectionHead(nn.Module):
     # Initialize Detection Head.
     def __init__(self, 
                  in_channels=256,          # FPN Channels.
-                 num_anchors=9,            # Anchors per Location (3 Ratios * 3 Scales).
-                 num_classes=1,            # Binary Classification (Object vs Background).
+                 num_anchors=1,            # Single anchor per location to match checkpoint
+                 num_classes=3,            # Multi-class Classification (3 classes).
                  num_convs=4,              # Number of Shared Convolutions.
                  debug=False):             # Debug flag
         super().__init__()
@@ -67,8 +67,8 @@ class DetectionHead(nn.Module):
         # Create Anchor Generator with reduced anchors
         self.anchor_generator = AnchorGenerator(
             base_sizes=[32, 64, 128, 256],  # For P2, P3, P4, P5
-            aspect_ratios=[0.5, 1.0, 2.0],  # Reduced from previous
-            scales=[1.0]  # Single scale to reduce anchors
+            aspect_ratios=[1.0],  # Single aspect ratio
+            scales=[1.0]  # Single scale
         )
         
         # Cache for anchor matching
@@ -94,18 +94,18 @@ class DetectionHead(nn.Module):
             nn.Conv2d(curr_channels, curr_channels, 3, padding=1)
         )
         
-        # Classification Branch
+        # Classification Branch (3 anchors × 3 classes = 9 channels)
         self.cls_head = nn.Conv2d(
             curr_channels, 
-            self.num_anchors * num_classes,
+            self.num_anchors * num_classes,  # Will be 9 channels
             3, 
             padding=1
         )
         
-        # Box Regression Branch
+        # Box Regression Branch (3 anchors × 4 coordinates × 3 classes = 36 channels)
         self.box_head = nn.Conv2d(
             curr_channels,
-            self.num_anchors * 4,
+            self.num_anchors * 4 * num_classes,  # Will be 36 channels
             3,
             padding=1
         )
@@ -176,9 +176,9 @@ class DetectionHead(nn.Module):
 
     # Match Anchors to Targets.
     def match_anchors_to_targets(self, anchors, target_boxes, target_labels, 
-                               iou_threshold=0.4,  # Lowered threshold
-                               max_matches_per_target=20):  # Increased matches
-        """Improved and optimized anchor matching."""
+                               iou_threshold=0.35,  # Lowered threshold for more matches
+                               max_matches_per_target=25):  # Increased matches
+        """Improved anchor matching with lower threshold."""
         device = target_boxes.device
         
         # Convert list of anchors to single tensor if needed
@@ -193,13 +193,8 @@ class DetectionHead(nn.Module):
         if len(target_boxes) == 0:
             return matched_labels, matched_boxes
         
-        # Normalize boxes to 0-1 range for better IoU computation
-        img_size = torch.tensor([800, 800, 800, 800], device=device)  # Assuming 800x800 images
-        norm_anchors = anchors / img_size
-        norm_targets = target_boxes / img_size
-        
         # Compute IoU matrix efficiently
-        ious = box_iou(norm_anchors, norm_targets)  # [num_anchors, num_targets]
+        ious = box_iou(anchors, target_boxes)  # [num_anchors, num_targets]
         
         # For each target, find top-k matching anchors
         max_ious, anchor_indices = ious.topk(k=min(max_matches_per_target, len(anchors)), dim=0)
@@ -217,37 +212,13 @@ class DetectionHead(nn.Module):
         if len(valid_anchor_idx) > 0:
             # Assign labels and boxes
             matched_labels[valid_anchor_idx] = target_labels[valid_target_idx]
-            
-            # Convert box coordinates to relative offsets
-            matched_anchors = anchors[valid_anchor_idx]
-            matched_targets = target_boxes[valid_target_idx]
-            
-            # Compute relative offsets (similar to YOLO format)
-            anchor_w = matched_anchors[:, 2] - matched_anchors[:, 0]
-            anchor_h = matched_anchors[:, 3] - matched_anchors[:, 1]
-            anchor_cx = matched_anchors[:, 0] + 0.5 * anchor_w
-            anchor_cy = matched_anchors[:, 1] + 0.5 * anchor_h
-            
-            gt_w = matched_targets[:, 2] - matched_targets[:, 0]
-            gt_h = matched_targets[:, 3] - matched_targets[:, 1]
-            gt_cx = matched_targets[:, 0] + 0.5 * gt_w
-            gt_cy = matched_targets[:, 1] + 0.5 * gt_h
-            
-            # Compute box deltas
-            dx = (gt_cx - anchor_cx) / anchor_w
-            dy = (gt_cy - anchor_cy) / anchor_h
-            dw = torch.log(gt_w / anchor_w)
-            dh = torch.log(gt_h / anchor_h)
-            
-            # Store deltas as matched boxes
-            matched_boxes[valid_anchor_idx] = torch.stack([dx, dy, dw, dh], dim=1)
+            matched_boxes[valid_anchor_idx] = target_boxes[valid_target_idx]
             
             if self.debug:
                 print(f"\nAnchor matching statistics:")
                 print(f"  Total anchors: {num_anchors}")
                 print(f"  Valid matches: {len(valid_anchor_idx)}")
                 print(f"  Average IoU: {max_ious[valid_matches].mean():.4f}")
-                print(f"  Box deltas range: [{matched_boxes[valid_anchor_idx].min():.3f}, {matched_boxes[valid_anchor_idx].max():.3f}]")
         
         return matched_labels, matched_boxes
 
@@ -294,12 +265,66 @@ class DetectionHead(nn.Module):
             
             # Get Raw Predictions.
             cls_score = self.cls_head(feat)  # [B, num_anchors*num_classes, H, W]
-            bbox_pred = self.box_head(feat)  # [B, num_anchors*4, H, W]
+            bbox_pred = self.box_head(feat)  # [B, num_anchors*4*num_classes, H, W]
             
             # Reshape Predictions.
             B, _, H, W = cls_score.shape
-            cls_score = cls_score.view(B, -1, self.num_classes, H, W)  # [B, num_anchors, num_classes, H, W]
-            bbox_pred = bbox_pred.view(B, -1, 4, H, W)  # [B, num_anchors, 4, H, W]
+            cls_score = cls_score.view(B, self.num_anchors, self.num_classes, H, W)  # [B, num_anchors, num_classes, H, W]
+            bbox_pred = bbox_pred.view(B, self.num_anchors, 4, self.num_classes, H, W)  # [B, num_anchors, 4, num_classes, H, W]
+            
+            # Take the box predictions for the highest scoring class
+            bbox_pred = bbox_pred.permute(0, 1, 3, 2, 4, 5)  # [B, num_anchors, num_classes, 4, H, W]
+            
+            # Get scores and corresponding box predictions
+            cls_probs = torch.sigmoid(cls_score)  # [B, num_anchors, num_classes, H, W]
+            best_class = cls_probs.argmax(dim=2, keepdim=True)  # [B, num_anchors, 1, H, W]
+            best_class_expanded = best_class.unsqueeze(3).expand(-1, -1, -1, 4, -1, -1)  # [B, num_anchors, 1, 4, H, W]
+            bbox_pred = torch.gather(bbox_pred, 2, best_class_expanded).squeeze(2)  # [B, num_anchors, 4, H, W]
+            
+            # Add box size constraints and normalization
+            # Convert deltas to actual coordinates
+            bbox_pred = bbox_pred.permute(0, 1, 3, 4, 2).reshape(B, -1, 4)  # [B, H*W*num_anchors, 4]
+            level_anchors = anchors[level_id].unsqueeze(0).expand(B, -1, -1)  # [B, H*W*num_anchors, 4]
+            
+            # Normalize anchor coordinates to [0, 1] range
+            image_size = torch.tensor([W, H, W, H], device=device).float()
+            level_anchors_norm = level_anchors / image_size
+            
+            # Convert predicted deltas to actual coordinates (using normalized anchors)
+            pred_ctr_x = level_anchors_norm[..., 0] + bbox_pred[..., 0] * level_anchors_norm[..., 2]
+            pred_ctr_y = level_anchors_norm[..., 1] + bbox_pred[..., 1] * level_anchors_norm[..., 3]
+            pred_w = level_anchors_norm[..., 2] * torch.exp(torch.clamp(bbox_pred[..., 2], min=-3.0, max=3.0))  # Less restrictive
+            pred_h = level_anchors_norm[..., 3] * torch.exp(torch.clamp(bbox_pred[..., 3], min=-3.0, max=3.0))
+            
+            # Add size constraints relative to image size
+            min_size = 0.005  # Allow smaller boxes
+            max_size = 0.98   # Allow larger boxes
+            
+            pred_w = torch.clamp(pred_w, min=min_size, max=max_size)
+            pred_h = torch.clamp(pred_h, min=min_size, max=max_size)
+            
+            # Convert back to x1,y1,x2,y2 format (normalized)
+            pred_x1 = pred_ctr_x - 0.5 * pred_w
+            pred_y1 = pred_ctr_y - 0.5 * pred_h
+            pred_x2 = pred_ctr_x + 0.5 * pred_w
+            pred_y2 = pred_ctr_y + 0.5 * pred_h
+            
+            # Ensure boxes are within normalized image bounds [0, 1] with small margin
+            pred_x1 = torch.clamp(pred_x1, min=0.0, max=0.99)
+            pred_y1 = torch.clamp(pred_y1, min=0.0, max=0.99)
+            pred_x2 = torch.clamp(pred_x2, min=0.01, max=1.0)
+            pred_y2 = torch.clamp(pred_y2, min=0.01, max=1.0)
+            
+            # Ensure minimum box size
+            box_w = pred_x2 - pred_x1
+            box_h = pred_y2 - pred_y1
+            invalid_boxes = (box_w < min_size) | (box_h < min_size)
+            pred_x2[invalid_boxes] = pred_x1[invalid_boxes] + min_size
+            pred_y2[invalid_boxes] = pred_y1[invalid_boxes] + min_size
+            
+            # Stack and reshape back to original format
+            bbox_pred = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=-1)
+            bbox_pred = bbox_pred.view(B, self.num_anchors, H, W, 4).permute(0, 1, 4, 2, 3)
             
             # Append Predictions.
             cls_scores.append(cls_score)

@@ -18,9 +18,9 @@ class AnchorGenerator:
     
     # Initialize Anchor Generator.
     def __init__(self,
-                 base_sizes: List[int] = [32, 64, 128, 256],  # Base anchor sizes for each FPN level
-                 aspect_ratios: List[float] = [0.5, 1.0, 2.0],  # Width/height ratios
-                 scales: List[float] = [1.0]):  # Additional scaling factors
+                 base_sizes: List[int] = [32, 64, 128, 256],  # Original base sizes
+                 aspect_ratios: List[float] = [1.0],  # Single aspect ratio
+                 scales: List[float] = [1.0]):  # Single scale
         """
         Initialize Anchor Generator.
         
@@ -41,7 +41,7 @@ class AnchorGenerator:
         
     # Generate Base Anchors.
     def _generate_base_anchors(self) -> List[torch.Tensor]:
-        """Generate Base Anchors for Each FPN Level."""
+        """Generate Base Anchors with Size Validation."""
         base_anchors = []
         
         # Iterate Over Each Base Size.
@@ -52,15 +52,17 @@ class AnchorGenerator:
             for ratio in self.aspect_ratios:
                 # Iterate Over Each Scale.
                 for scale in self.scales:
-                    # Calculate Width and Height.
+                    # Calculate Width and Height with Size Limits
                     size = base_size * scale
-                    w = size * math.sqrt(ratio)
-                    h = size / math.sqrt(ratio)
+                    w = min(size * math.sqrt(ratio), base_size * 3)  # More conservative width limit
+                    h = min(size / math.sqrt(ratio), base_size * 3)  # More conservative height limit
+                    
+                    # Ensure minimum size
+                    w = max(w, base_size * 0.2)  # Increased minimum width
+                    h = max(h, base_size * 0.2)  # Increased minimum height
                     
                     # Validate Dimensions.
                     if w <= 0 or h <= 0:
-                        print(f"[WARNING] Invalid anchor dimensions at base_size={base_size}, ratio={ratio}, scale={scale}")
-                        print(f"  w={w}, h={h}")
                         continue
                     
                     # Create Anchor Box [x1, y1, x2, y2] Centered at Origin.
@@ -70,7 +72,6 @@ class AnchorGenerator:
                     
                     # Validate Anchor Coordinates.
                     if anchor[0] >= anchor[2] or anchor[1] >= anchor[3]:
-                        print(f"[WARNING] Invalid anchor coordinates: {anchor}")
                         continue
                     
                     level_anchors.append(anchor)

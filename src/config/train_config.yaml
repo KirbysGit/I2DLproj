@@ -6,12 +6,13 @@
 model:
   pretrained_backbone: true   # Whether to Use Pretrained Backbone.
   fpn_out_channels: 256       # Number of Output Channels for FPN.
-  num_classes: 1              # Number of Classes.
-  num_anchors: 6              # Number of Anchors.
+  num_classes: 3              # Number of Classes.
+  num_anchors: 3              # Number of Anchors.
 
 # Data Configuration
 data:
   data_dir: "datasets/SKU-110K"
+  image_size: 640
 
 # Training Configuration.
 training:
@@ -20,8 +21,8 @@ training:
   num_workers: 4                    # Number of Workers.
   learning_rate: 1e-4             # Learning Rate.
   weight_decay: 1e-4              # Weight Decay.
-  epochs: 50                       # Number of Epochs.
-  save_freq: 2                      # Save checkpoint every 2 epochs
+  epochs: 20                       # Number of Epochs.
+  save_freq: 1                      # Save checkpoint every 1 epoch
   validate_freq: 1                  # Run validation every epoch
   grad_clip: 1.0                    # Gradient Clipping.
   save_dir: "checkpoints"           # Save Directory.
@@ -29,6 +30,9 @@ training:
   project_name: 'sku-detection'     # Project Name.
   verbose: true                     # Enable detailed logging
   checkpoint_keep_num: 5            # Number of checkpoints to keep (delete older ones)
+  optimizer_type: "adamw"
+  scheduler_type: "onecycle"
+  visualize: true
 
 # Evaluation Parameters.
 evaluation:

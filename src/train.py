@@ -3,6 +3,9 @@ import yaml
 from pathlib import Path
 import sys
 import argparse  # Add argument parser for debug mode
+import matplotlib.pyplot as plt
+import numpy as np
+from datetime import datetime
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))  # Add src to path
 
@@ -10,6 +13,97 @@ from src.model.detector import build_detector
 from src.data.dataset import SKU110KDataset
 from src.training.trainer import Trainer
 from src.utils.augmentation import DetectionAugmentation
+
+class MetricsTracker:
+    def __init__(self):
+        self.train_losses = []
+        self.val_losses = []
+        self.train_maps = []
+        self.val_maps = []
+        self.train_f1s = []
+        self.val_f1s = []
+        self.epochs = []
+    
+    def update(self, epoch, train_metrics, val_metrics):
+        self.epochs.append(epoch)
+        self.train_losses.append(train_metrics['loss'])
+        self.val_losses.append(val_metrics['loss'])
+        self.train_maps.append(train_metrics['mAP'])
+        self.val_maps.append(val_metrics['mAP'])
+        self.train_f1s.append(train_metrics['f1'])
+        self.val_f1s.append(val_metrics['f1'])
+    
+    def plot_metrics(self, output_dir):
+        # Create output directory
+        output_dir = Path(output_dir)
+        output_dir.mkdir(exist_ok=True)
+        
+        # Plot loss curves
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.epochs, self.train_losses, label='Training Loss')
+        plt.plot(self.epochs, self.val_losses, label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(output_dir / 'loss_curves.png')
+        plt.close()
+        
+        # Plot mAP curves
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.epochs, self.train_maps, label='Training mAP')
+        plt.plot(self.epochs, self.val_maps, label='Validation mAP')
+        plt.title('Training and Validation mAP')
+        plt.xlabel('Epoch')
+        plt.ylabel('mAP')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(output_dir / 'map_curves.png')
+        plt.close()
+        
+        # Plot F1 curves
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.epochs, self.train_f1s, label='Training F1')
+        plt.plot(self.epochs, self.val_f1s, label='Validation F1')
+        plt.title('Training and Validation F1 Score')
+        plt.xlabel('Epoch')
+        plt.ylabel('F1 Score')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(output_dir / 'f1_curves.png')
+        plt.close()
+        
+        # Save metrics to file
+        metrics_file = output_dir / 'training_metrics.txt'
+        with open(metrics_file, 'w') as f:
+            f.write('Training Results Summary\n')
+            f.write('=======================\n\n')
+            f.write(f'Final Training Loss: {self.train_losses[-1]:.4f}\n')
+            f.write(f'Final Validation Loss: {self.val_losses[-1]:.4f}\n')
+            f.write(f'Final Training mAP: {self.train_maps[-1]:.4f}\n')
+            f.write(f'Final Validation mAP: {self.val_maps[-1]:.4f}\n')
+            f.write(f'Final Training F1: {self.train_f1s[-1]:.4f}\n')
+            f.write(f'Final Validation F1: {self.val_f1s[-1]:.4f}\n')
+            
+            f.write('\nTraining Observations:\n')
+            f.write('---------------------\n')
+            
+            # Add observations about training behavior
+            loss_diff = self.train_losses[-1] - self.val_losses[-1]
+            if abs(loss_diff) > 0.3:
+                if loss_diff < 0:
+                    f.write('- Potential underfitting: Training loss higher than validation loss\n')
+                else:
+                    f.write('- Potential overfitting: Training loss lower than validation loss\n')
+            
+            # Check for convergence
+            if len(self.train_losses) > 5:
+                recent_loss_change = abs(self.train_losses[-1] - self.train_losses[-5])
+                if recent_loss_change < 0.01:
+                    f.write('- Model converged: Loss stabilized in recent epochs\n')
+                elif self.train_losses[-1] > self.train_losses[-5]:
+                    f.write('- Warning: Loss increasing in recent epochs\n')
 
 def main():
     # Add argument parser
@@ -22,11 +116,23 @@ def main():
     parser.add_argument('--image-size', type=int, default=800, help='Input image size')
     args = parser.parse_args()
 
+    # Create timestamp for this training run
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_dir = Path(f"training_runs/{timestamp}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
     # Get config
     config_path = Path(__file__).parent / "config" / "train_config.yaml"
     
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
+    
+    # Save configuration
+    with open(run_dir / 'config.yaml', 'w') as f:
+        yaml.dump(config, f)
+    
+    # Initialize metrics tracker
+    metrics_tracker = MetricsTracker()
     
     # Modify config based on arguments
     config["training"]["batch_size"] = args.batch_size
@@ -110,7 +216,9 @@ def main():
                 "print_gradient_stats": True,   # Print statistics about gradients
                 "save_debug_images": True,      # Save debug visualizations
                 "debug_dir": str(debug_dir)     # Specify debug output directory
-            }
+            },
+            "metrics_tracker": metrics_tracker,
+            "run_dir": str(run_dir)
         },
         device=device
     )
@@ -119,7 +227,9 @@ def main():
     # Train
     try:
         trainer.train()
-        print("\nTraining completed successfully!")
+        # Generate training visualizations
+        metrics_tracker.plot_metrics(run_dir)
+        print(f"\nTraining completed successfully! Results saved to {run_dir}")
     except Exception as e:
         print(f"\nError during training: {str(e)}")
         raise

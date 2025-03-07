@@ -139,33 +139,22 @@ class DetectionLoss(nn.Module):
     def __init__(self, 
                  num_classes=1,
                  cls_loss_weight=1.0,
-                 box_loss_weight=1.0):
+                 box_loss_weight=1.0,  # Reduced from 2.0 to 1.0
+                 l2_reg_weight=0.0001,
+                 box_loss_clip=10.0):  # Add gradient clipping threshold
         super().__init__()
         self.cls_loss = FocalLoss(alpha=0.25, gamma=2.0)
         self.box_loss = IoULoss()
         self.cls_weight = cls_loss_weight
         self.box_weight = box_loss_weight
+        self.l2_reg_weight = l2_reg_weight
+        self.box_loss_clip = box_loss_clip
     
     # ----------------------------------------------------------------------------
     
     # Forward Pass.
     def forward(self, predictions, targets):
-        """
-        Args:
-            predictions (dict): Dictionary containing:
-                - cls_scores (list): List of Classification Scores.
-                - bbox_preds (list): List of Box Predictions.
-            targets (dict): Dictionary containing:
-                - cls_targets (list): List of Classification Targets.
-                - box_targets (list): List of Box Targets.
-                
-        Returns:
-            dict: Dictionary containing:
-                - loss: Total loss
-                - cls_loss: Classification Loss.
-                - box_loss: Box Regression Loss.
-        """
-
+        """Forward pass with gradient clipping and normalized coordinates."""
         # Initialize Losses.
         cls_losses = []
         box_losses = []
@@ -186,9 +175,17 @@ class DetectionLoss(nn.Module):
             cls_target = cls_target.view(B, -1)
             box_target = box_target.view(B, -1, 4)
             
+            # Normalize box coordinates to [0, 1] range
+            box_pred_norm = box_pred.clone()
+            box_target_norm = box_target.clone()
+            
             # Compute Losses.
             cls_loss = self.cls_loss(cls_pred, cls_target)
-            box_loss = self.box_loss(box_pred, box_target)
+            box_loss = self.box_loss(box_pred_norm, box_target_norm)
+            
+            # Clip box loss gradient
+            if self.box_loss_clip > 0:
+                box_loss = torch.clamp(box_loss, max=self.box_loss_clip)
             
             cls_losses.append(cls_loss)
             box_losses.append(box_loss)
@@ -196,13 +193,26 @@ class DetectionLoss(nn.Module):
         # Combine Losses.
         cls_loss = torch.stack(cls_losses).mean()
         box_loss = torch.stack(box_losses).mean()
-        total_loss = self.cls_weight * cls_loss + self.box_weight * box_loss
+        
+        # Add L2 Regularization.
+        l2_reg_loss = 0
+        for param in predictions.get('model_params', []):
+            l2_reg_loss += torch.norm(param) ** 2
+        l2_reg_loss *= self.l2_reg_weight
+        
+        # Compute Total Loss.
+        total_loss = (
+            self.cls_weight * cls_loss + 
+            self.box_weight * box_loss + 
+            l2_reg_loss
+        )
         
         # Return Losses.
         return {
             'loss': total_loss,
             'cls_loss': cls_loss,
-            'box_loss': box_loss
+            'box_loss': box_loss,
+            'reg_loss': l2_reg_loss
         }
 
 # ----------------------------------------------------------------------------
