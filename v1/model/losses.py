@@ -22,35 +22,34 @@ class FocalLoss(nn.Module):
     Focuses Training on Hard Examples by Down-Weighting Easy Examples.
     """
     
-    # Initialize.
     def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
         """
         Args:
-            alpha (float):      Weighting Factor for Rare Class.
-            gamma (float):      Focusing Parameter.
-            reduction (str): '  none', 'mean', 'sum'.
+            alpha (float): Weighting Factor for Rare Class.
+            gamma (float): Focusing Parameter.
+            reduction (str): 'none', 'mean', 'sum'.
         """
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
     
-    # ----------------------------------------------------------------------------
-    
-    # Forward Pass.
     def forward(self, pred, target):
         """
         Args:
-            pred (torch.Tensor):    Predicted Class Scores [B, N, C].
-            target (torch.Tensor):  Target Classes [B, N].
+            pred (torch.Tensor): Predicted Class Scores [B, N, C].
+            target (torch.Tensor): Target Classes [B, N].
             
         Returns:
-            torch.Tensor:           Computed Focal Loss.
+            torch.Tensor: Computed Focal Loss.
         """
-        # Ensure Target is Long Type for One-Hot.
+        # Ensure Inputs Require Gradients.
+        pred = pred.requires_grad_(True)
+        
+        # Ensure Target is Long Type for One-Hot Encoding.
         target = target.long()
         
-        # Convert Targets to One-Hot.
+        # Convert Targets to One-Hot Encoding.
         num_classes = pred.size(-1)
         target_one_hot = F.one_hot(target, num_classes).float()
         
@@ -74,8 +73,6 @@ class FocalLoss(nn.Module):
             return loss.sum()
         return loss
 
-# ----------------------------------------------------------------------------
-
 # IoU Loss Class.
 class IoULoss(nn.Module):
     """
@@ -83,24 +80,23 @@ class IoULoss(nn.Module):
     Directly Optimizes the IoU Metric.
     """
     
-    # Initialize.
     def __init__(self, reduction='mean', eps=1e-7):
         super().__init__()
         self.reduction = reduction
         self.eps = eps
     
-    # ----------------------------------------------------------------------------
-    
-    # Forward Pass.
     def forward(self, pred, target):
         """
         Args:
-            pred (torch.Tensor):    Predicted Boxes [B, N, 4] in (x1, y1, x2, y2) Format.
-            target (torch.Tensor):  Target Boxes [B, N, 4] in (x1, y1, x2, y2) Format.
+            pred (torch.Tensor): Predicted Boxes [B, N, 4] in (x1, y1, x2, y2) Format.
+            target (torch.Tensor): Target Boxes [B, N, 4] in (x1, y1, x2, y2) Format.
             
         Returns:
-            torch.Tensor:           Computed IoU Loss.
+            torch.Tensor: Computed IoU Loss.
         """
+        # Ensure inputs require gradients.
+        pred = pred.requires_grad_(True)
+        
         # Compute Box Areas.
         pred_area = (pred[..., 2] - pred[..., 0]) * (pred[..., 3] - pred[..., 1])
         target_area = (target[..., 2] - target[..., 0]) * (target[..., 3] - target[..., 1])
@@ -125,8 +121,6 @@ class IoULoss(nn.Module):
             return loss.sum()
         return loss
 
-# ----------------------------------------------------------------------------
-
 # Detection Loss Class. 
 class DetectionLoss(nn.Module):
     """
@@ -135,13 +129,12 @@ class DetectionLoss(nn.Module):
     - IoU Loss for Box Regression
     """
     
-    # Initialize.
     def __init__(self, 
                  num_classes=1,
                  cls_loss_weight=1.0,
-                 box_loss_weight=1.0,  # Reduced from 2.0 to 1.0
+                 box_loss_weight=1.0,
                  l2_reg_weight=0.0001,
-                 box_loss_clip=10.0):  # Add gradient clipping threshold
+                 box_loss_clip=10.0):
         super().__init__()
         self.cls_loss = FocalLoss(alpha=0.25, gamma=2.0)
         self.box_loss = IoULoss()
@@ -150,9 +143,6 @@ class DetectionLoss(nn.Module):
         self.l2_reg_weight = l2_reg_weight
         self.box_loss_clip = box_loss_clip
     
-    # ----------------------------------------------------------------------------
-    
-    # Forward Pass.
     def forward(self, predictions, targets):
         """Forward pass with gradient clipping and normalized coordinates."""
         # Initialize Losses.
@@ -183,7 +173,7 @@ class DetectionLoss(nn.Module):
             cls_loss = self.cls_loss(cls_pred, cls_target)
             box_loss = self.box_loss(box_pred_norm, box_target_norm)
             
-            # Clip box loss gradient
+            # Clip Box Loss Gradient.
             if self.box_loss_clip > 0:
                 box_loss = torch.clamp(box_loss, max=self.box_loss_clip)
             
@@ -215,12 +205,13 @@ class DetectionLoss(nn.Module):
             'reg_loss': l2_reg_loss
         }
 
-# ----------------------------------------------------------------------------
-
 # IoU Weighted Box Loss Class.
 class IoUWeightedBoxLoss(nn.Module):
     def forward(self, pred_boxes, target_boxes, ious):
         """IoU-weighted box regression loss."""
+        # Ensure inputs require gradients
+        pred_boxes = pred_boxes.requires_grad_(True)
+        
         # Basic Regression Loss.
         loss = F.smooth_l1_loss(pred_boxes, target_boxes, reduction='none')
         
@@ -229,4 +220,4 @@ class IoUWeightedBoxLoss(nn.Module):
         weighted_loss = (loss * iou_weights.unsqueeze(-1)).mean()
         
         # Return Weighted Loss.
-        return weighted_loss 
+        return weighted_loss

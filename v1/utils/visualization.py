@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 from typing import Dict, List, Tuple
-from src.utils.box_ops import box_iou
-from src.utils.metrics import DetectionMetrics
+from v1.utils.box_ops import box_iou
+from v1.utils.metrics import DetectionMetrics
 
 # Detection Visualizer Class.
 class DetectionVisualizer:
@@ -310,4 +310,175 @@ class DetectionVisualizer:
         plt.tight_layout()
 
         # Show Figure.
-        plt.show() 
+        plt.show()
+
+    def visualize_predictions(self, image, pred_boxes, pred_scores, gt_boxes, output_path, title=""):
+        """Visualize predictions using the proven visualization function."""
+        from v1.evaluate import visualize_detections
+        
+        # Get dimensions from the transformed image
+        _, H, W = image.shape
+        resize_size = (H, W)
+        
+        # Call the proven visualization function
+        visualize_detections(
+            image=image,
+            pred_boxes=pred_boxes,
+            pred_scores=pred_scores,
+            gt_boxes=gt_boxes,
+            output_path=output_path,
+            resize_size=resize_size
+        )
+
+def visualize_anchors_and_gt(image, gt_boxes, anchors_by_level, output_path, max_anchors_per_level=100):
+    """
+    Visualize anchors and ground truth boxes on an image.
+    
+    Args:
+        image (torch.Tensor): Image tensor [C, H, W]
+        gt_boxes (torch.Tensor): Ground truth boxes in [x1, y1, x2, y2] format, normalized
+        anchors_by_level (list): List of anchor tensors for each FPN level
+        output_path (str): Path to save visualization
+        max_anchors_per_level (int): Maximum number of anchors to plot per level for clarity
+    """
+    # Convert image for plotting
+    img = image.cpu().permute(1, 2, 0).numpy()
+    img = (img * 0.5) + 0.5  # Denormalize
+    img = np.clip(img, 0, 1)
+    
+    H, W = img.shape[:2]
+    
+    # Create figure and axis
+    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+    
+    # Plot original image with GT boxes
+    ax[0].imshow(img)
+    ax[0].set_title("Ground Truth Boxes")
+    
+    # Plot GT boxes in red
+    for box in gt_boxes:
+        x1, y1, x2, y2 = box.cpu().numpy() * [W, H, W, H]  # Denormalize
+        width = x2 - x1
+        height = y2 - y1
+        rect = patches.Rectangle((x1, y1), width, height, 
+                               linewidth=2, edgecolor='r', facecolor='none')
+        ax[0].add_patch(rect)
+    
+    # Plot image with anchors
+    ax[1].imshow(img)
+    ax[1].set_title("Anchors by Level")
+    
+    # Colors for different FPN levels
+    colors = ['b', 'g', 'c', 'm', 'y']
+    
+    # Plot anchors for each level
+    for level_idx, anchors in enumerate(anchors_by_level):
+        # Subsample anchors if too many
+        if len(anchors) > max_anchors_per_level:
+            indices = torch.randperm(len(anchors))[:max_anchors_per_level]
+            anchors = anchors[indices]
+        
+        # Plot anchors
+        for anchor in anchors:
+            x1, y1, x2, y2 = anchor.cpu().numpy() * [W, H, W, H]  # Denormalize
+            width = x2 - x1
+            height = y2 - y1
+            rect = patches.Rectangle((x1, y1), width, height,
+                                  linewidth=1, edgecolor=colors[level_idx % len(colors)],
+                                  facecolor='none', alpha=0.5)
+            ax[1].add_patch(rect)
+    
+    # Add legend
+    legend_elements = [patches.Patch(facecolor='none', edgecolor='r', label='Ground Truth')]
+    for i in range(len(anchors_by_level)):
+        legend_elements.append(
+            patches.Patch(facecolor='none', edgecolor=colors[i % len(colors)],
+                         label=f'Level {i} Anchors')
+        )
+    ax[1].legend(handles=legend_elements, loc='upper right')
+    
+    # Save plot
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+def analyze_anchor_coverage(gt_boxes, anchors_by_level):
+    """
+    Analyze how well anchors cover ground truth boxes.
+    
+    Args:
+        gt_boxes (torch.Tensor): Ground truth boxes
+        anchors_by_level (list): List of anchor tensors for each FPN level
+    
+    Returns:
+        dict: Statistics about anchor coverage
+    """
+    stats = {
+        'gt_stats': {},
+        'anchor_stats': {},
+        'matching_stats': {}
+    }
+    
+    # Ground truth statistics
+    gt_widths = gt_boxes[:, 2] - gt_boxes[:, 0]
+    gt_heights = gt_boxes[:, 3] - gt_boxes[:, 1]
+    gt_areas = gt_widths * gt_heights
+    gt_aspects = gt_widths / gt_heights
+    
+    stats['gt_stats'] = {
+        'min_size': float(min(gt_widths.min(), gt_heights.min())),
+        'max_size': float(max(gt_widths.max(), gt_heights.max())),
+        'mean_aspect': float(gt_aspects.mean()),
+        'area_range': [float(gt_areas.min()), float(gt_areas.max())]
+    }
+    
+    # Analyze each FPN level
+    for level_idx, anchors in enumerate(anchors_by_level):
+        # Anchor statistics
+        anchor_widths = anchors[:, 2] - anchors[:, 0]
+        anchor_heights = anchors[:, 3] - anchors[:, 1]
+        anchor_areas = anchor_widths * anchor_heights
+        anchor_aspects = anchor_widths / anchor_heights
+        
+        stats['anchor_stats'][f'level_{level_idx}'] = {
+            'min_size': float(min(anchor_widths.min(), anchor_heights.min())),
+            'max_size': float(max(anchor_widths.max(), anchor_heights.max())),
+            'mean_aspect': float(anchor_aspects.mean()),
+            'area_range': [float(anchor_areas.min()), float(anchor_areas.max())]
+        }
+        
+        # Calculate IoU between anchors and GT boxes
+        ious = box_iou(anchors, gt_boxes)
+        max_ious, _ = ious.max(dim=1)
+        
+        # Matching statistics
+        stats['matching_stats'][f'level_{level_idx}'] = {
+            'mean_iou': float(max_ious.mean()),
+            'max_iou': float(max_ious.max()),
+            'matched_anchors': int((max_ious > 0.5).sum()),
+            'total_anchors': len(anchors)
+        }
+    
+    return stats
+
+def box_iou(boxes1, boxes2):
+    """
+    Compute IoU between two sets of boxes.
+    
+    Args:
+        boxes1, boxes2: Tensors of shape (N, 4) and (M, 4)
+    Returns:
+        IoU matrix of shape (N, M)
+    """
+    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+    
+    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
+    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
+    
+    wh = (rb - lt).clamp(min=0)  # [N,M,2]
+    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
+    
+    union = area1[:, None] + area2 - inter
+    
+    return inter / (union + 1e-6) 

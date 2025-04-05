@@ -38,6 +38,7 @@ class WarmupCosineScheduler(_LRScheduler):
         self.max_epochs = max_epochs
         self.warmup_start_lr = warmup_start_lr
         self.eta_min = eta_min
+        self.warmup_progress_shown = False
         
         super().__init__(optimizer, -1)
     
@@ -49,6 +50,16 @@ class WarmupCosineScheduler(_LRScheduler):
             # Linear Warmup.
             alpha = self.last_epoch / self.warmup_epochs
             factor = alpha
+            
+            # Show warmup progress
+            progress = int(alpha * 20)  # 20 steps progress bar
+            if not self.warmup_progress_shown:
+                print("\nWarmup Phase:")
+                self.warmup_progress_shown = True
+            print(f"\r[{'=' * progress}{' ' * (20-progress)}] {int(alpha*100)}% ", end='')
+            
+            if self.last_epoch == self.warmup_epochs - 1:
+                print("\nWarmup completed!")
         else:
             # Cosine decay
             progress = (self.last_epoch - self.warmup_epochs) / (self.max_epochs - self.warmup_epochs)
@@ -70,34 +81,41 @@ def build_scheduler(optimizer, config):
             - epochs: Number of epochs
             - learning_rate: Base learning rate
             - steps_per_epoch: Number of steps per epoch
+            - warmup_epochs: Number of warmup epochs (default: 1)
     
     Returns:
         torch.optim.lr_scheduler._LRScheduler: The configured scheduler
     """
     scheduler_type = config.get('scheduler_type', 'onecycle').lower()
     epochs = int(config.get('epochs', 10))
+    warmup_epochs = int(config.get('warmup_epochs', 1))
     
     if scheduler_type == 'onecycle':
         # OneCycleLR is good for training from scratch
         steps_per_epoch = config.get('steps_per_epoch', 100)
         max_lr = float(config.get('learning_rate', 1e-3))
         
+        # Calculate pct_start based on warmup_epochs
+        pct_start = warmup_epochs / epochs
+        
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=max_lr,
             epochs=epochs,
             steps_per_epoch=steps_per_epoch,
-            pct_start=0.3,  # Spend 30% of time warming up
+            pct_start=pct_start,  # Use warmup_epochs to determine warmup percentage
             div_factor=25,  # Initial learning rate is max_lr/25
             final_div_factor=1e4  # Final learning rate is max_lr/10000
         )
     
     elif scheduler_type == 'cosine':
-        # Cosine annealing for fine-tuning
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        # Use our custom WarmupCosineScheduler for warmup + cosine decay
+        scheduler = WarmupCosineScheduler(
             optimizer,
-            T_max=epochs,
-            eta_min=0
+            warmup_epochs=warmup_epochs,
+            max_epochs=epochs,
+            warmup_start_lr=float(config.get('learning_rate', 1e-3)) / 25,  # Similar to OneCycleLR
+            eta_min=float(config.get('learning_rate', 1e-3)) / 1e4  # Similar to OneCycleLR
         )
     
     elif scheduler_type == 'step':
@@ -105,10 +123,18 @@ def build_scheduler(optimizer, config):
         step_size = int(config.get('step_size', epochs // 3))
         gamma = float(config.get('gamma', 0.1))
         
-        scheduler = torch.optim.lr_scheduler.StepLR(
+        # Wrap StepLR with linear warmup
+        base_scheduler = torch.optim.lr_scheduler.StepLR(
             optimizer,
             step_size=step_size,
             gamma=gamma
+        )
+        
+        scheduler = WarmupCosineScheduler(
+            optimizer,
+            warmup_epochs=warmup_epochs,
+            max_epochs=epochs,
+            warmup_start_lr=float(config.get('learning_rate', 1e-3)) / 25
         )
     
     elif scheduler_type == 'plateau':

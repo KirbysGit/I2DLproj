@@ -10,13 +10,14 @@
 
 # Imports.
 import torch
-from torch.utils.data import Dataset
-import torchvision.transforms.functional as F
-from pathlib import Path
 import cv2
-import pandas as pd
 import numpy as np
+import pandas as pd
+from pathlib import Path
 from typing import Dict, List, Tuple
+from torch.utils.data import Dataset
+from restart.utils.box_ops import normalize_boxes, unnormalize_boxes
+import torchvision.transforms.functional as F
 
 # Dataset Class.
 class SKU110KDataset(Dataset):
@@ -25,7 +26,7 @@ class SKU110KDataset(Dataset):
     def __init__(self, 
                  data_dir: str,
                  split: str = 'train',
-                 transform = None):
+                 transform = None, resize_dims = None):
         """
         Args:
             data_dir:     Path to SKU-110K Dataset Directory.
@@ -35,6 +36,7 @@ class SKU110KDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.split = split
         self.transform = transform
+        self.resize_dims = resize_dims
         
         # Load Annotations from CSV.
         ann_file = self.data_dir / 'annotations' / f'annotations_{split}.csv'
@@ -42,8 +44,6 @@ class SKU110KDataset(Dataset):
             'image_name', 'x1', 'y1', 'x2', 'y2', 'class', 'image_width', 'image_height'
         ])
         
-        # Print Column Names to Debug.
-        print(f"CSV Columns: {self.annotations_df.columns.tolist()}")
         
         # Get Unique Image IDs - Using First Column Which Should be Image Names.
         image_col = self.annotations_df.columns[0]  # Get First Column Name.
@@ -62,7 +62,7 @@ class SKU110KDataset(Dataset):
     # Get Image Annotations.
     def get_image_annotations(self, img_id: str) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get boxes and labels for an image."""
-
+        
         # Get Annotations for This Image.
         img_anns = self.annotations_df[self.annotations_df['image_name'] == img_id]
         
@@ -72,13 +72,29 @@ class SKU110KDataset(Dataset):
         
         # Iterate Over Annotations.
         for _, ann in img_anns.iterrows():
-            x1, y1, x2, y2 = ann['x1'], ann['y1'], ann['x2'], ann['y2']
-            boxes.append([x1, y1, x2, y2])
-            labels.append(1)  # All Objects are Class 1, Background is 0.
+            try:
+                # Extract Box Coordinates.
+                x1, y1, x2, y2 = float(ann['x1']), float(ann['y1']), float(ann['x2']), float(ann['y2'])
+                
+                # Ensure Box Coordinates are Valid.
+                if x2 > x1 and y2 > y1:
+                    boxes.append([x1, y1, x2, y2])
+                    labels.append(1)  # All Objects are Class 1.
+                else:
+                    print(f"Warning: Skipping invalid box: {[x1, y1, x2, y2]}")
+            except Exception as e:
+                print(f"Error processing annotation: {ann}")
+                print(f"Error: {str(e)}")
         
+        # If No Valid Boxes, Return Zero Tensor.
+        if not boxes:
+            print(f"Warning: No valid boxes found for image {img_id}")
+            return torch.zeros((0, 4), dtype=torch.float32), torch.zeros(0, dtype=torch.long)
+        
+        # Return Boxes and Labels as Tensors.
         return (
             torch.tensor(boxes, dtype=torch.float32),
-            torch.tensor(labels, dtype=torch.long)  # Make sure labels are long type
+            torch.tensor(labels, dtype=torch.long)
         )
     
     # Resize Image with Aspect Ratio.
@@ -108,12 +124,17 @@ class SKU110KDataset(Dataset):
             boxes[:, [0, 2]] = boxes[:, [0, 2]] * scale + x_offset
             boxes[:, [1, 3]] = boxes[:, [1, 3]] * scale + y_offset
         
+        # Return Padded Image and Boxes.
         return padded, boxes
     
     # Get Item.
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """Get a single sample."""
+
+        # Get Image ID.
         img_id = self.image_ids[idx]
+
+        # Get Image Path.
         image_path = self.image_paths[img_id]
         
         # Load Image.
@@ -122,77 +143,75 @@ class SKU110KDataset(Dataset):
             raise ValueError(f"Failed to load image: {image_path}")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        # Get original image dimensions
+        # Get Original Image Dimensions.
         orig_h, orig_w = image.shape[:2]
         
-        # Get boxes and labels for this image
+        # Get Boxes and Labels for This Image.
         boxes, labels = self.get_image_annotations(img_id)
         
-        # Convert boxes to absolute coordinates if they're normalized
-        if boxes.max() <= 1.0:
-            boxes = boxes * torch.tensor([orig_w, orig_h, orig_w, orig_h], dtype=torch.float32)
-        
-        # Ensure boxes are valid
-        boxes = torch.clamp(boxes, min=0)
-        boxes[..., 0].clamp_(max=orig_w)  # x1
-        boxes[..., 1].clamp_(max=orig_h)  # y1
-        boxes[..., 2].clamp_(max=orig_w)  # x2
-        boxes[..., 3].clamp_(max=orig_h)  # y2
-        
-        # Filter out invalid boxes
-        valid_boxes = []
-        valid_labels = []
-        for box, label in zip(boxes, labels):
-            x1, y1, x2, y2 = box
-            if x2 > x1 and y2 > y1:
-                valid_boxes.append([x1, y1, x2, y2])
-                valid_labels.append(label)
-        
-        if len(valid_boxes) == 0:
-            # Handle case with no valid boxes
-            valid_boxes = torch.zeros((0, 4), dtype=torch.float32)
-            valid_labels = torch.zeros(0, dtype=torch.long)
-        else:
-            valid_boxes = torch.tensor(valid_boxes, dtype=torch.float32)
-            valid_labels = torch.tensor(valid_labels, dtype=torch.long)
-        
-        # Apply transforms if any
+        # Convert Boxes to Float.
+        if len(boxes) > 0:
+            boxes = boxes.float()
+
+        # Apply Transforms if Any.
+        resize_size = None
         if self.transform:
-            # Convert boxes to pascal_voc format (already in this format)
             transformed = self.transform(
                 image=image,
-                bboxes=valid_boxes.numpy(),
-                labels=valid_labels.numpy()
+                boxes=boxes,
+                labels=labels,
+                is_train=(self.split == 'train')
             )
-            image = transformed['image']  # Will be a tensor
-            boxes = torch.tensor(transformed['bboxes'], dtype=torch.float32)
+
+            # Get Transformed Image, Boxes, and Labels.
+            image = transformed['image']
+            boxes = torch.tensor(transformed.get('bboxes', []), dtype=torch.float32)
             labels = torch.tensor(transformed['labels'], dtype=torch.long)
+
+            # Get resize dimensions from transform
+            resize_size = self.resize_dims
+
+            if resize_size is not None and len(boxes) > 0:
+                boxes = normalize_boxes(boxes, (orig_h, orig_w), resize_size)
+
         else:
-            # If no transform, convert image to tensor
+            # Manually apply resize if no transform.
+            if self.resize_dims:
+                image, boxes = self.resize_with_aspect_ratio(image, boxes, self.resize_dims)
+                resize_size = self.resize_dims
+
+            # ✅ Normalize after manual resize
+            if len(boxes) > 0:
+                boxes = normalize_boxes(boxes, (orig_h, orig_w), resize_size)
+            
+            # Convert Image to Tensor.
             image = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
-            boxes = valid_boxes
-            labels = valid_labels
         
+        # Return Image, Boxes, Labels, and Image ID.
         return {
             'image': image,
             'boxes': boxes,
             'labels': labels,
-            'image_id': img_id
+            'image_id': img_id,
+            'orig_size': (orig_h, orig_w),  # Original size for proper scaling
+            'resize_size': resize_size  # Add resize dimensions
         }
     
     # Collate Function.
     @staticmethod
     def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        """Custom collate function for batching."""
+        """Custom Collate Function for Batching."""
         images = torch.stack([item['image'] for item in batch])
         image_ids = [item['image_id'] for item in batch]
         
         # Pad Boxes and Labels to Same Length.
         max_boxes = max(len(item['boxes']) for item in batch)
         
+        # Initialize Batch Boxes and Labels.
         batch_boxes = []
         batch_labels = []
         
+        # Iterate Over Batch.
         for item in batch:
             num_boxes = len(item['boxes'])
             if num_boxes == 0:
@@ -219,9 +238,12 @@ class SKU110KDataset(Dataset):
         boxes = torch.stack(batch_boxes)
         labels = torch.stack(batch_labels)
         
+        # Return Image, Boxes, Labels, and Image IDs.
         return {
             'images': images,
             'boxes': boxes,
             'labels': labels,
-            'image_ids': image_ids
+            'image_ids': image_ids,
+            'orig_sizes': [item['orig_size'] for item in batch],
+            'resize_sizes': [item['resize_size'] for item in batch]
         } 

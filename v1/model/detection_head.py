@@ -13,10 +13,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .anchor_generator import AnchorGenerator
 from typing import List, Tuple
-from src.utils.box_ops import box_iou
-
+from v1.utils.box_ops import box_iou
+from v1.model.anchor_generator import AnchorGenerator
+import math
+import matplotlib.pyplot as plt
+import os
 # Box Coder Class.
 class BoxCoder:
     """Box Coordinate Conversion Utilities."""
@@ -58,61 +60,66 @@ class DetectionHead(nn.Module):
                  num_anchors=1,            # Single anchor per location to match checkpoint
                  num_classes=3,            # Multi-class Classification (3 classes).
                  num_convs=4,              # Number of Shared Convolutions.
-                 debug=False):             # Debug flag
+                 debug=False,
+                 min_size=0.02,  # Minimum allowed prediction size (2% of image)
+                 max_size=0.5,   # Maximum allowed prediction size (50% of image)
+                 max_delta=2.0): # Maximum allowed box delta
         super().__init__()
         
         # Debug settings
         self.debug = debug
+        self.min_size = min_size
+        self.max_size = max_size
+        self.max_delta = max_delta
         
-        # Create Anchor Generator with reduced anchors
+        # Create Anchor Generator with improved configuration for dense objects
         self.anchor_generator = AnchorGenerator(
-            base_sizes=[32, 64, 128, 256],  # For P2, P3, P4, P5
-            aspect_ratios=[1.0],  # Single aspect ratio
-            scales=[1.0]  # Single scale
+            min_size=min_size,
+            max_size=max_size
         )
         
         # Cache for anchor matching
         self._cached_anchors = None
         self._cached_image_size = None
         
-        # Update num_anchors based on Generator.
+        # Update num_anchors based on Generator
         self.num_anchors = len(self.anchor_generator.aspect_ratios) * len(self.anchor_generator.scales)
         self.num_classes = num_classes
         
-        # Shared Convolutions with consistent channels
+        # Shared Convolutions with BatchNorm and ReLU
         self.shared_convs = nn.ModuleList()
         curr_channels = in_channels
         
-        # First n-1 convolutions maintain input channels
-        for _ in range(num_convs - 1):
-            self.shared_convs.append(
-                nn.Conv2d(curr_channels, curr_channels, 3, padding=1)
+        for _ in range(num_convs):
+            conv_block = nn.Sequential(
+                nn.Conv2d(curr_channels, curr_channels, 3, padding=1, bias=False),
+                nn.BatchNorm2d(curr_channels),
+                nn.ReLU(inplace=True)
             )
+            self.shared_convs.append(conv_block)
         
-        # Last convolution can reduce channels if needed
-        self.shared_convs.append(
-            nn.Conv2d(curr_channels, curr_channels, 3, padding=1)
-        )
-        
-        # Classification Branch (3 anchors × 3 classes = 9 channels)
+        # Classification Branch
         self.cls_head = nn.Conv2d(
             curr_channels, 
-            self.num_anchors * num_classes,  # Will be 9 channels
+            self.num_anchors * num_classes,
             3, 
             padding=1
         )
         
-        # Box Regression Branch (3 anchors × 4 coordinates × 3 classes = 36 channels)
+        # Box Regression Branch
         self.box_head = nn.Conv2d(
             curr_channels,
-            self.num_anchors * 4 * num_classes,  # Will be 36 channels
+            self.num_anchors * 4,  # Remove multiplication by num_classes
             3,
             padding=1
         )
         
-        # Loss Functions
-        self.cls_criterion = nn.BCEWithLogitsLoss(reduction='mean')
-        self.box_criterion = nn.SmoothL1Loss(reduction='mean', beta=0.1)
+        # Loss Functions with improved weighting
+        self.alpha = 0.25  # Focal loss alpha
+        self.gamma = 2.0   # Focal loss gamma
+        self.box_beta = 0.05  # L1-smooth loss beta
+        self.cls_weight = 1.0  # Classification loss weight
+        self.box_weight = 1.0  # Box regression loss weight
         
         # Initialize Weights
         self._initialize_weights()
@@ -142,33 +149,36 @@ class DetectionHead(nn.Module):
 
     # Forward Pass for a Single Feature Level.
     def forward_single(self, x):
-        """
-        Forward pass for a single feature level.
-        
-        Args:
-            x (torch.Tensor): Feature Map from FPN [B, C, H, W].
-            
-        Returns:
-            tuple:
-                cls_scores [B, num_anchors * num_classes, H, W]
-                bbox_preds [B, num_anchors * 4, H, W]
-        """
-        # Shared Convolutions with ReLU activation
+        """Forward pass for a single feature level with improved feature extraction."""
+        # Apply shared convolutions with BatchNorm and ReLU
         feat = x
-        for conv in self.shared_convs:
-            feat = F.relu(conv(feat))
+        for conv_block in self.shared_convs:
+            feat = conv_block(feat)  # Already includes BatchNorm and ReLU
             if self.debug:
-                print(f"Feature shape after conv: {feat.shape}")
+                print(f"Feature shape after conv block: {feat.shape}")
         
-        # Classification Prediction
+        # Classification head
         cls_scores = self.cls_head(feat)
+
+        if self.debug:
+            probs = torch.sigmoid(cls_scores)
+            high_conf = (probs > 0.9).sum().item()
+            print(f"[🔍] High confidence predictions (>0.9): {high_conf} / {probs.numel()}")
+
         
-        # Box Regression Prediction
+        # Box regression head
         bbox_preds = self.box_head(feat)
         
         if self.debug:
             print(f"Classification scores shape: {cls_scores.shape}")
             print(f"Box predictions shape: {bbox_preds.shape}")
+            
+            # Add feature statistics for debugging
+            print(f"Feature statistics:")
+            print(f"  Mean: {feat.mean():.4f}")
+            print(f"  Std: {feat.std():.4f}")
+            print(f"  Max: {feat.max():.4f}")
+            print(f"  Min: {feat.min():.4f}")
         
         return cls_scores, bbox_preds
     
@@ -176,9 +186,9 @@ class DetectionHead(nn.Module):
 
     # Match Anchors to Targets.
     def match_anchors_to_targets(self, anchors, target_boxes, target_labels, 
-                               iou_threshold=0.35,  # Lowered threshold for more matches
-                               max_matches_per_target=25):  # Increased matches
-        """Improved anchor matching with lower threshold."""
+                               iou_threshold=0.2,  # Lower threshold for dense objects
+                               max_matches_per_target=50):  # More matches for dense scenes
+        """Improved anchor matching for dense object detection with dynamic thresholding."""
         device = target_boxes.device
         
         # Convert list of anchors to single tensor if needed
@@ -196,6 +206,23 @@ class DetectionHead(nn.Module):
         # Compute IoU matrix efficiently
         ious = box_iou(anchors, target_boxes)  # [num_anchors, num_targets]
         
+        # Dynamic IoU thresholding based on training progress
+        if hasattr(self, 'training_progress'):
+            # Start with very lenient threshold and gradually increase
+            min_iou = 0.1
+            max_iou = 0.3
+            current_iou = min_iou + (max_iou - min_iou) * self.training_progress
+            iou_threshold = min(current_iou, iou_threshold)
+        
+        # Get matches above threshold
+        matches_above_thresh = (ious >= iou_threshold).sum().item()
+        
+        # If too few matches, gradually lower threshold
+        if matches_above_thresh < len(target_boxes) * 2:  # Aim for at least 2 matches per target
+            while iou_threshold > 0.1 and matches_above_thresh < len(target_boxes) * 2:
+                iou_threshold *= 0.8  # Reduce threshold by 20%
+                matches_above_thresh = (ious >= iou_threshold).sum().item()
+        
         # For each target, find top-k matching anchors
         max_ious, anchor_indices = ious.topk(k=min(max_matches_per_target, len(anchors)), dim=0)
         
@@ -209,23 +236,33 @@ class DetectionHead(nn.Module):
         valid_anchor_idx = anchor_indices[valid_matches]
         valid_target_idx = target_indices[valid_matches]
         
+        # Ensure each target gets at least one anchor
+        best_anchor_per_target, _ = ious.max(dim=0)  # [num_targets]
+        force_match_mask = best_anchor_per_target < iou_threshold
+        if force_match_mask.any():
+            force_match_anchors = ious.argmax(dim=0)[force_match_mask]
+            force_match_targets = torch.arange(len(target_boxes), device=device)[force_match_mask]
+            valid_anchor_idx = torch.cat([valid_anchor_idx, force_match_anchors])
+            valid_target_idx = torch.cat([valid_target_idx, force_match_targets])
+        
         if len(valid_anchor_idx) > 0:
             # Assign labels and boxes
             matched_labels[valid_anchor_idx] = target_labels[valid_target_idx]
             matched_boxes[valid_anchor_idx] = target_boxes[valid_target_idx]
             
             if self.debug:
-                print(f"\nAnchor matching statistics:")
-                print(f"  Total anchors: {num_anchors}")
-                print(f"  Valid matches: {len(valid_anchor_idx)}")
-                print(f"  Average IoU: {max_ious[valid_matches].mean():.4f}")
+                print(f"\nMatching Statistics:")
+                print(f"Total matches: {len(valid_anchor_idx)}")
+                print(f"Matches per target: {len(valid_anchor_idx)/len(target_boxes):.1f}")
+                print(f"Final IoU threshold: {iou_threshold:.3f}")
+                print(f"Force-matched targets: {force_match_mask.sum().item()}")
         
         return matched_labels, matched_boxes
 
     # ----------------------------------------------------------------------------
 
     # Forward Pass.
-    def forward(self, features):
+    def forward(self, features, image_size):
         """Forward Pass Through Detection Head."""
 
         # Get Feature List.
@@ -263,70 +300,42 @@ class DetectionHead(nn.Module):
             for conv in self.shared_convs:
                 feat = F.relu(conv(feat))
             
-            # Get Raw Predictions.
+            # Get Raw Predictions
             cls_score = self.cls_head(feat)  # [B, num_anchors*num_classes, H, W]
-            bbox_pred = self.box_head(feat)  # [B, num_anchors*4*num_classes, H, W]
+            bbox_pred = self.box_head(feat)  # [B, num_anchors*4, H, W]
             
-            # Reshape Predictions.
+            # Ensure consistent dtype
+            cls_score = cls_score.to(dtype=torch.float32)
+            bbox_pred = bbox_pred.to(dtype=torch.float32)
+            
+            # Reshape Predictions
             B, _, H, W = cls_score.shape
-            cls_score = cls_score.view(B, self.num_anchors, self.num_classes, H, W)  # [B, num_anchors, num_classes, H, W]
-            bbox_pred = bbox_pred.view(B, self.num_anchors, 4, self.num_classes, H, W)  # [B, num_anchors, 4, num_classes, H, W]
+            cls_score = cls_score.view(B, self.num_anchors, self.num_classes, H, W)
+            bbox_pred = bbox_pred.view(B, self.num_anchors, 4, H, W)
+            
+            # Apply temperature scaling and bias correction for better calibration
+            temperature = 2.0  # Higher temperature = softer probabilities
+            cls_score = cls_score / temperature
+            
+            # Add small bias to prevent extreme probabilities
+            eps = 1e-6
+            cls_probs = torch.sigmoid(cls_score)
+            cls_probs = cls_probs * (1 - 2 * eps) + eps  # Squash to [eps, 1-eps]
+            
+            # Quality-aware confidence adjustment
+            if self.training:
+                # During training, use raw probabilities
+                final_scores = cls_probs
+            else:
+                # During inference, adjust confidence based on prediction quality
+                box_quality = self._compute_box_quality(bbox_pred)  # [B, num_anchors, H, W]
+                box_quality = box_quality.unsqueeze(2)  # Add class dimension
+                final_scores = cls_probs * box_quality  # Reduce confidence for low-quality boxes
             
             # Take the box predictions for the highest scoring class
-            bbox_pred = bbox_pred.permute(0, 1, 3, 2, 4, 5)  # [B, num_anchors, num_classes, 4, H, W]
+            bbox_pred = bbox_pred.permute(0, 1, 3, 4, 2)  # [B, num_anchors, H, W, 4]
             
             # Get scores and corresponding box predictions
-            cls_probs = torch.sigmoid(cls_score)  # [B, num_anchors, num_classes, H, W]
-            best_class = cls_probs.argmax(dim=2, keepdim=True)  # [B, num_anchors, 1, H, W]
-            best_class_expanded = best_class.unsqueeze(3).expand(-1, -1, -1, 4, -1, -1)  # [B, num_anchors, 1, 4, H, W]
-            bbox_pred = torch.gather(bbox_pred, 2, best_class_expanded).squeeze(2)  # [B, num_anchors, 4, H, W]
-            
-            # Add box size constraints and normalization
-            # Convert deltas to actual coordinates
-            bbox_pred = bbox_pred.permute(0, 1, 3, 4, 2).reshape(B, -1, 4)  # [B, H*W*num_anchors, 4]
-            level_anchors = anchors[level_id].unsqueeze(0).expand(B, -1, -1)  # [B, H*W*num_anchors, 4]
-            
-            # Normalize anchor coordinates to [0, 1] range
-            image_size = torch.tensor([W, H, W, H], device=device).float()
-            level_anchors_norm = level_anchors / image_size
-            
-            # Convert predicted deltas to actual coordinates (using normalized anchors)
-            pred_ctr_x = level_anchors_norm[..., 0] + bbox_pred[..., 0] * level_anchors_norm[..., 2]
-            pred_ctr_y = level_anchors_norm[..., 1] + bbox_pred[..., 1] * level_anchors_norm[..., 3]
-            pred_w = level_anchors_norm[..., 2] * torch.exp(torch.clamp(bbox_pred[..., 2], min=-3.0, max=3.0))  # Less restrictive
-            pred_h = level_anchors_norm[..., 3] * torch.exp(torch.clamp(bbox_pred[..., 3], min=-3.0, max=3.0))
-            
-            # Add size constraints relative to image size
-            min_size = 0.005  # Allow smaller boxes
-            max_size = 0.98   # Allow larger boxes
-            
-            pred_w = torch.clamp(pred_w, min=min_size, max=max_size)
-            pred_h = torch.clamp(pred_h, min=min_size, max=max_size)
-            
-            # Convert back to x1,y1,x2,y2 format (normalized)
-            pred_x1 = pred_ctr_x - 0.5 * pred_w
-            pred_y1 = pred_ctr_y - 0.5 * pred_h
-            pred_x2 = pred_ctr_x + 0.5 * pred_w
-            pred_y2 = pred_ctr_y + 0.5 * pred_h
-            
-            # Ensure boxes are within normalized image bounds [0, 1] with small margin
-            pred_x1 = torch.clamp(pred_x1, min=0.0, max=0.99)
-            pred_y1 = torch.clamp(pred_y1, min=0.0, max=0.99)
-            pred_x2 = torch.clamp(pred_x2, min=0.01, max=1.0)
-            pred_y2 = torch.clamp(pred_y2, min=0.01, max=1.0)
-            
-            # Ensure minimum box size
-            box_w = pred_x2 - pred_x1
-            box_h = pred_y2 - pred_y1
-            invalid_boxes = (box_w < min_size) | (box_h < min_size)
-            pred_x2[invalid_boxes] = pred_x1[invalid_boxes] + min_size
-            pred_y2[invalid_boxes] = pred_y1[invalid_boxes] + min_size
-            
-            # Stack and reshape back to original format
-            bbox_pred = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=-1)
-            bbox_pred = bbox_pred.view(B, self.num_anchors, H, W, 4).permute(0, 1, 4, 2, 3)
-            
-            # Append Predictions.
             cls_scores.append(cls_score)
             bbox_preds.append(bbox_pred)
         
@@ -350,6 +359,23 @@ class DetectionHead(nn.Module):
             'bbox_preds': bbox_preds,
             'anchors': anchors
         }
+
+    def _compute_box_quality(self, bbox_pred):
+        """Compute box prediction quality score."""
+        # Extract box deltas
+        dx = bbox_pred[..., 0, :, :]
+        dy = bbox_pred[..., 1, :, :]
+        dw = bbox_pred[..., 2, :, :]
+        dh = bbox_pred[..., 3, :, :]
+        
+        # Penalize large shifts and extreme size changes
+        center_quality = torch.exp(-(dx.pow(2) + dy.pow(2)) / 0.5)  # Penalize large center shifts
+        size_quality = torch.exp(-(dw.pow(2) + dh.pow(2)) / 0.5)   # Penalize extreme size changes
+        
+        # Combine qualities
+        box_quality = center_quality * size_quality
+        
+        return box_quality
 
     # ----------------------------------------------------------------------------
 
@@ -391,7 +417,7 @@ class DetectionHead(nn.Module):
             print(f"Total anchors: {self.total_anchors}")
         
         # Initialize Final Labels Tensor.
-        final_labels = torch.zeros((batch_size, self.total_anchors), device=device)
+        final_labels = torch.zeros((batch_size, self.total_anchors), dtype=torch.long, device=device)
         
         # Match Anchors For Each Image.
         for b in range(batch_size):
@@ -406,13 +432,35 @@ class DetectionHead(nn.Module):
             print(f"\nFinal labels shape: {final_labels.shape}")
             print(f"Positive samples: {(final_labels > 0).sum().item()}")
         
-        return self.cls_criterion(pred_scores.squeeze(-1), final_labels)
+        # Ensure no NaN values in predictions
+        pred_scores = torch.clamp(pred_scores, min=1e-7, max=1-1e-7)
+        
+        return self.focal_loss(pred_scores, final_labels)
+
+    def focal_loss(self, pred_scores, target_labels):
+        """Compute focal loss for better handling of class imbalance."""
+        # Ensure predictions are valid
+        pred_scores = torch.clamp(pred_scores, min=1e-7, max=1-1e-7)
+        
+        # Convert targets to one-hot if needed and ensure it's long type
+        if target_labels.dim() == pred_scores.dim() - 1:
+            target_labels = target_labels.to(torch.long)  # Ensure long type
+            target_labels = F.one_hot(target_labels, num_classes=pred_scores.shape[-1]).float()
+        
+        # Compute focal loss
+        ce_loss = -(target_labels * torch.log(pred_scores) + 
+                   (1 - target_labels) * torch.log(1 - pred_scores))
+        p_t = target_labels * pred_scores + (1 - target_labels) * (1 - pred_scores)
+        alpha_t = target_labels * self.alpha + (1 - target_labels) * (1 - self.alpha)
+        focal_weight = alpha_t * (1 - p_t).pow(self.gamma)
+        
+        return (focal_weight * ce_loss).mean()
 
     # ----------------------------------------------------------------------------
 
     # Box Loss.
     def box_loss(self, bbox_preds, gt_boxes, gt_labels):
-        """Compute box regression loss."""
+        """Compute box regression loss with proper shape handling."""
         if self.debug:
             print("\nBox Loss Computation:")
             for i, level_preds in enumerate(bbox_preds):
@@ -459,6 +507,9 @@ class DetectionHead(nn.Module):
                 matched_preds = bbox_preds[b][pos_mask]  # These are predicted deltas
                 matched_targets = matched_boxes[pos_mask]  # These are target deltas
                 
+                # Ensure no invalid values
+                matched_preds = torch.clamp(matched_preds, min=-4.0, max=4.0)
+                
                 all_matched_preds.append(matched_preds)
                 all_matched_targets.append(matched_targets)
         
@@ -470,7 +521,13 @@ class DetectionHead(nn.Module):
         
         # Stack all matches
         pos_pred_deltas = torch.cat(all_matched_preds, dim=0)
-        pos_target_deltas = torch.cat(all_matched_targets, dim=0)
+        raw_target_boxes = torch.cat(all_matched_targets, dim=0)
+        raw_anchors = torch.cat([torch.cat(self.last_anchors).to(pos_pred_deltas.device)] * batch_size, dim=0)
+        matched_anchors = raw_anchors[pos_pred_deltas.shape[0] * b : pos_pred_deltas.shape[0] * (b + 1)]
+
+        # ✅ Encode GT boxes into deltas
+        pos_target_deltas = self.box_coder.encode(matched_anchors, raw_target_boxes)
+
         
         if self.debug:
             print(f"\nPositive matches:")
@@ -489,13 +546,24 @@ class DetectionHead(nn.Module):
             print(f"  Mean: {pos_target_deltas.mean():.3f}")
             print(f"  Std: {pos_target_deltas.std():.3f}")
         
-        # Compute loss on deltas directly
-        loss = F.smooth_l1_loss(pos_pred_deltas, pos_target_deltas, reduction='mean', beta=0.1)
+        # Compute loss on deltas directly with gradient clipping
+        loss = self.balanced_l1_loss(pos_pred_deltas, pos_target_deltas, self.box_beta)
         
         if self.debug:
             print(f"\nBox loss value: {loss.item():.6f}")
         
         return loss
+
+    def balanced_l1_loss(self, pred, target, beta=0.05):
+        """Compute balanced L1 loss for box regression."""
+        diff = torch.abs(pred - target)
+        b = math.exp(1) - 1
+        loss = torch.where(
+            diff < beta,
+            beta / b * (b * diff + 1) * torch.log(b * diff / beta + 1) - diff,
+            diff - beta / 2
+        )
+        return loss.mean()
 
     # ----------------------------------------------------------------------------
 
@@ -524,3 +592,60 @@ class DetectionHead(nn.Module):
         
         # Return Labels and Matched Targets.
         return labels, matched_targets 
+
+    def apply_deltas(self, deltas, anchors):
+        """Apply predicted deltas to anchors with size constraints."""
+        # Get anchor dimensions
+        anchor_widths = anchors[:, 2] - anchors[:, 0]
+        anchor_heights = anchors[:, 3] - anchors[:, 1]
+        anchor_ctr_x = anchors[:, 0] + 0.5 * anchor_widths
+        anchor_ctr_y = anchors[:, 1] + 0.5 * anchor_heights
+        
+        # Clamp deltas to prevent extreme values
+        dx = torch.clamp(deltas[:, 0], -self.max_delta, self.max_delta)
+        dy = torch.clamp(deltas[:, 1], -self.max_delta, self.max_delta)
+        dw = torch.clamp(deltas[:, 2], -self.max_delta, self.max_delta)
+        dh = torch.clamp(deltas[:, 3], -self.max_delta, self.max_delta)
+        
+        # Compute new centers
+        ctr_x = dx * anchor_widths + anchor_ctr_x
+        ctr_y = dy * anchor_heights + anchor_ctr_y
+        
+        # Compute new dimensions with exponential to ensure positive values
+        w = anchor_widths * torch.exp(dw)
+        h = anchor_heights * torch.exp(dh)
+        
+        # Enforce minimum and maximum sizes
+        w = torch.clamp(w, min=self.min_size, max=self.max_size)
+        h = torch.clamp(h, min=self.min_size, max=self.max_size)
+        
+        # Convert back to box coordinates
+        x1 = ctr_x - 0.5 * w
+        y1 = ctr_y - 0.5 * h
+        x2 = ctr_x + 0.5 * w
+        y2 = ctr_y + 0.5 * h
+        
+        # Clamp boxes to image boundaries
+        x1 = torch.clamp(x1, 0, 1)
+        y1 = torch.clamp(y1, 0, 1)
+        x2 = torch.clamp(x2, 0, 1)
+        y2 = torch.clamp(y2, 0, 1)
+        
+        # Stack coordinates
+        boxes = torch.stack([x1, y1, x2, y2], dim=1)
+        
+        # Validate final boxes
+        widths = boxes[:, 2] - boxes[:, 0]
+        heights = boxes[:, 3] - boxes[:, 1]
+        
+        # Create validity mask
+        valid_sizes = (widths >= self.min_size) & (heights >= self.min_size) & \
+                     (widths <= self.max_size) & (heights <= self.max_size)
+        
+        if self.debug and not valid_sizes.all():
+            invalid_count = (~valid_sizes).sum().item()
+            print(f"[WARNING] {invalid_count} predictions had invalid sizes after delta application")
+            print(f"Size ranges: width [{widths.min():.3f}, {widths.max():.3f}], "
+                  f"height [{heights.min():.3f}, {heights.max():.3f}]")
+        
+        return boxes, valid_sizes 
