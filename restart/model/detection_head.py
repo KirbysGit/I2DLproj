@@ -283,33 +283,44 @@ class DetectionHead(nn.Module):
             return matched_labels, matched_gt_boxes
             
         ious = box_iou(anchors, gt_boxes)
-
-        #if debug == True:
-            #print("[DEBUG] Positive anchors:", pos_mask.sum().item())
-            #print("[DEBUG] GTs matched to anchors:", matched_labels.unique(return_counts=True))
-            #print("[DEBUG] Aspect Ratio Distribution:", anchors[:, 2] / anchors[:, 3])
-
-            #print(f"[DEBUG] IoU Threshold: {iou_threshold}")
-            #print(f"[DEBUG] Max IoU per GT: {ious.max(dim=0).values}")
-            #print(f"[DEBUG] Max IoU per anchor: {ious.max(dim=1).values}")
-
+        
+        # For each anchor, get the GT box with highest IoU
         max_iou, max_idx = ious.max(dim=1)
-
+        
+        # For each GT box, get the anchor with highest IoU
+        gt_max_ious, gt_argmax = ious.max(dim=0)
+        
+        # Mark positive samples
         pos_mask = max_iou >= iou_threshold
         matched_labels[pos_mask] = gt_labels[max_idx[pos_mask]]
-
         matched_gt_boxes[pos_mask] = gt_boxes[max_idx[pos_mask]]
         
-        if debug == True:
-            print("[DEBUG] Positive anchors:", pos_mask.sum().item())
-            print("[DEBUG] GTs matched to anchors:", matched_labels.unique(return_counts=True))
-            print("[DEBUG] Aspect Ratio Distribution:", anchors[:, 2] / anchors[:, 3])
-        #    print(f"[DEBUG] GT boxes shape: {gt_boxes}")
-        #    print(f"[DEBUG] Anchors shape: {anchors[:10]}")
-
-        # For each GT box, force assign highest-IoU anchor (even if IoU is low)
-        gt_max_ious, gt_best_anchor_idxs = ious.max(dim=0)
-        matched_labels[gt_best_anchor_idxs] = gt_labels
-        matched_gt_boxes[gt_best_anchor_idxs] = gt_boxes
+        # Ensure each GT box has at least one anchor
+        matched_labels[gt_argmax] = gt_labels
+        matched_gt_boxes[gt_argmax] = gt_boxes
+        
+        # Add center-based matching: anchors whose centers fall within GT boxes
+        anchor_centers = torch.stack([
+            (anchors[:, 0] + anchors[:, 2]) / 2,
+            (anchors[:, 1] + anchors[:, 3]) / 2
+        ], dim=1)
+        
+        gt_centers = torch.stack([
+            (gt_boxes[:, 0] + gt_boxes[:, 2]) / 2,
+            (gt_boxes[:, 1] + gt_boxes[:, 3]) / 2
+        ], dim=1)
+        
+        # For each GT box
+        for gt_idx in range(len(gt_boxes)):
+            gt_box = gt_boxes[gt_idx]
+            # Check which anchor centers fall within this GT box
+            inside_box = (
+                (anchor_centers[:, 0] >= gt_box[0]) &
+                (anchor_centers[:, 0] <= gt_box[2]) &
+                (anchor_centers[:, 1] >= gt_box[1]) &
+                (anchor_centers[:, 1] <= gt_box[3])
+            )
+            matched_labels[inside_box] = gt_labels[gt_idx]
+            matched_gt_boxes[inside_box] = gt_box
 
         return matched_labels, matched_gt_boxes

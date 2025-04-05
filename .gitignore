@@ -32,10 +32,7 @@ weights/
 *.csv
 *.json
 *.xml
-*.yaml
 *.yml
-!config/*.yaml
-!config/*.yml
 
 # Logs and Metrics
 logs/
@@ -129,3 +126,14 @@ htmlcov/
 .coverage.*
 coverage.xml
 *.cover 
+
+test_runs/
+training_runs/
+comparison_results/
+pytest.ini
+*.ini
+*.yml
+*.json
+*.csv
+*.jsonl
+*.jsonl.gz

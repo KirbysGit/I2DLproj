@@ -1,0 +1,15 @@
+dataset_path: datasets/SKU-110K
+resize_dims: [416, 416]
+batch_size: 8
+num_epochs: 5  # Extended training
+learning_rate: 0.0002
+warmup_epochs: 3  # Longer warmup
+lr_decay_epochs: [12, 16]  # Later decay points
+lr_decay_factor: 0.2  # Gentler decay
+device: "cuda"
+subset_size: 40  # Larger training set
+visualize_per_epoch: true
+num_visualizations: 2
+output_dir: training_runs
+save_dir: checkpoints
+visualization_dir: visualizations

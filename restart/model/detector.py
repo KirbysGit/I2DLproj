@@ -15,6 +15,8 @@ from restart.model.backbone import ResNetBackbone
 from restart.model.fpn import FeaturePyramidNetwork
 from restart.model.detection_head import DetectionHead
 from restart.model.anchor_generator import AnchorGenerator
+from restart.utils.box_ops import box_iou
+from restart.utils.box_ops import normalize_boxes
 debug = False
 
 # Object Detector Class.
@@ -44,9 +46,9 @@ class ObjectDetector(nn.Module):
         
         # Create Anchor Generator w/ Improved Configuration.
         self.anchor_generator = AnchorGenerator(
-            base_sizes=[64, 128, 256, 512],   
-            scales=[0.5, 1.0, 1.5],
-            aspect_ratios=[0.5, 1.0, 2.0],
+            base_sizes=[32, 64, 128, 256, 512],   # Added smaller base size
+            scales=[0.5, 0.75, 1.0, 1.25],        # More fine-grained scales
+            aspect_ratios=[0.3, 0.5, 1.0, 2.0, 3.0],  # Wider range of ratios
         )
 
         self.num_anchors = len(self.anchor_generator.aspect_ratios) * len(self.anchor_generator.scales)
@@ -60,18 +62,18 @@ class ObjectDetector(nn.Module):
             debug=debug
         )
         
-        # More permissive thresholds for early training
-        self.conf_thresh = 0.5
-        self.nms_thresh = 0.3
+        # More lenient thresholds
+        self.conf_thresh = 0.2    # Lower confidence threshold
+        self.nms_thresh = 0.5     # More permissive NMS
+        self.max_predictions = 300 # Allow more predictions
+        self.score_threshold = 0.2 # Lower score threshold
+        self.max_overlap = 0.6    # More permissive overlap
 
-        
-        # Much more permissive size ranges
-        self.min_sizes = [0.001, 0.005, 0.01, 0.02]  # More permissive minimum sizes
-        self.max_sizes = [0.1, 0.2, 0.3, 0.4]       # More permissive maximum sizes
-        
-        
-        # Debug flag
+        # Debug Settings
         self.debug = debug
+        self.min_size = 0.001  # Allow smaller detections
+        self.max_size = 0.9    # Allow larger detections
+        self.max_delta = 5.0   # Keep same box adjustment flexibility
 
     # Forward Pass.
     def forward(self, images, boxes=None, labels=None):
@@ -125,9 +127,9 @@ class ObjectDetector(nn.Module):
             pred_boxes_flat, valid_mask_flat = apply_deltas_to_anchors(
                 level_boxes_flat,
                 anchors_flat,
-                max_delta=2.0,
-                min_size=self.min_sizes[level_idx],
-                max_size=self.max_sizes[level_idx],
+                max_delta=self.max_delta,
+                min_size=self.min_size,
+                max_size=self.max_size,
                 image_size=(img_w, img_h)
             )
 
@@ -135,15 +137,22 @@ class ObjectDetector(nn.Module):
             pred_boxes = pred_boxes_flat.view(B, -1, 4)
             valid_mask = valid_mask_flat.view(B, -1)
 
-            # Confidence filtering
+            # Confidence filtering with additional size-based filtering
             confidence_mask = (max_scores > self.conf_thresh) & valid_mask
-            assert confidence_mask.shape == max_scores.shape, "Shape mismatch"
+            
+            # Additional size-based filtering
+            box_widths = pred_boxes[..., 2] - pred_boxes[..., 0]
+            box_heights = pred_boxes[..., 3] - pred_boxes[..., 1]
+            size_mask = (box_widths > 5) & (box_heights > 5) & (box_widths < img_w/2) & (box_heights < img_h/2)
+            
+            confidence_mask = confidence_mask & size_mask.view(confidence_mask.shape)
 
-            # Filtered lists
+            # Initialize filtered lists for this level
             level_filtered_boxes = []
             level_filtered_scores = []
             level_filtered_labels = []
 
+            # Apply more aggressive filtering per image
             for b in range(B):
                 b_mask = confidence_mask[b]
                 if not b_mask.any():
@@ -153,14 +162,43 @@ class ObjectDetector(nn.Module):
                 b_scores = max_scores[b][b_mask]
                 b_labels = max_classes[b][b_mask]
 
-                # NMS
-                keep = nms(b_boxes, b_scores, iou_threshold=self.nms_thresh)
-                keep = keep[:10]
+                # Sort by confidence and take top k
+                top_k = min(len(b_scores), self.max_predictions)
+                scores_sorted, indices = b_scores.sort(descending=True)
+                indices = indices[:top_k]
+                
+                b_boxes = b_boxes[indices]
+                b_scores = b_scores[indices]
+                b_labels = b_labels[indices]
 
-                if len(keep) > 0:
-                    level_filtered_boxes.append(b_boxes[keep])
-                    level_filtered_scores.append(b_scores[keep])
-                    level_filtered_labels.append(b_labels[keep])
+                # More aggressive NMS
+                keep = nms(b_boxes, b_scores, iou_threshold=self.nms_thresh)
+                
+                # Additional overlap check
+                final_indices = []
+                for i in range(len(keep)):
+                    if i == 0:
+                        final_indices.append(keep[i])
+                        continue
+                    
+                    current_box = b_boxes[keep[i]].unsqueeze(0)  # [1, 4]
+                    previous_boxes = b_boxes[torch.tensor(final_indices, device=device)]  # [N, 4]
+                    overlaps = box_iou(current_box, previous_boxes)
+                    if overlaps.max() < self.max_overlap:
+                        final_indices.append(keep[i])
+
+                if final_indices:
+                    final_indices = torch.tensor(final_indices, device=device)
+                    # Use normalize_boxes function for consistent normalization
+                    b_boxes = b_boxes[final_indices]
+                    # Get original and resized dimensions
+                    orig_size = (orig_h, orig_w) = images.shape[2:]
+                    resize_size = (img_h, img_w)
+                    # Normalize boxes using the same function as dataset
+                    b_boxes_normalized = normalize_boxes(b_boxes, orig_size, resize_size)
+                    level_filtered_boxes.append(b_boxes_normalized)
+                    level_filtered_scores.append(b_scores[final_indices])
+                    level_filtered_labels.append(b_labels[final_indices])
 
             # Add to all outputs
             if level_filtered_boxes:
@@ -212,7 +250,6 @@ class ObjectDetector(nn.Module):
 
             outputs['cls_loss'] = cls_loss
             outputs['box_loss'] = box_loss
-
 
         return outputs
 

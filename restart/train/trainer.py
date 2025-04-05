@@ -50,10 +50,31 @@ model = ObjectDetector(
 
 optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
 
+# Learning rate scheduling
+base_lr = config["learning_rate"]
+warmup_epochs = config.get("warmup_epochs", 5)
+lr_decay_epochs = config.get("lr_decay_epochs", [30, 40])
+lr_decay_factor = config.get("lr_decay_factor", 0.1)
+
 losses_cls, losses_box = [], []
 print("[✓] Starting Training...")
 
 for epoch in range(config["num_epochs"]):
+    # Learning rate adjustment
+    if epoch < warmup_epochs:
+        # Linear warmup
+        lr = base_lr * (epoch + 1) / warmup_epochs
+    else:
+        # Step decay
+        lr = base_lr
+        for decay_epoch in lr_decay_epochs:
+            if epoch >= decay_epoch:
+                lr *= lr_decay_factor
+    
+    # Update learning rate
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
     model.train()
     epoch_cls_loss, epoch_box_loss = 0.0, 0.0
 
@@ -66,12 +87,16 @@ for epoch in range(config["num_epochs"]):
         optimizer.zero_grad()
         outputs = model(images, boxes=boxes, labels=labels)
 
-        loss = outputs["cls_loss"] + outputs["box_loss"]
+        # Add Loss Weighting.
+        cls_loss = outputs["cls_loss"]
+        box_loss = outputs["box_loss"]
+        loss = cls_loss + 0.1 * box_loss
+
         loss.backward()
         optimizer.step()
 
-        cls_val = outputs["cls_loss"].item()
-        box_val = outputs["box_loss"].item()
+        cls_val = cls_loss.item()
+        box_val = box_loss.item()
 
         epoch_cls_loss += cls_val
         epoch_box_loss += box_val
@@ -116,3 +141,5 @@ for epoch in range(config["num_epochs"]):
 
 # ---- PLOT TRAINING LOSS ----
 plot_losses(losses_cls, losses_box, os.path.join(run_dir, "training_loss.png"))
+
+

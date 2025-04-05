@@ -15,53 +15,76 @@ def visualize_detections(image_tensor, detections, ground_truths=None, orig_size
         image_tensor (Tensor): Image tensor in CHW format, range [0, 1].
         detections (dict): Dictionary with 'boxes', 'scores', and 'labels' for predicted outputs.
         ground_truths (dict, optional): Dictionary with 'boxes' and 'labels' for ground truth boxes.
+        orig_size (tuple): Original image size (H, W)
+        resize_size (tuple): Resized image size (H, W)
         title (str): Title for the displayed image.
     """
+    # Convert image to numpy and scale to 0-255
+    image = image_tensor.cpu().permute(1, 2, 0).numpy()
+    image = (image * 255).astype(np.uint8)
+    H, W = image.shape[:2]
 
-    # Unnormalize boxes if they are normalized.
-    if ground_truths is not None and orig_size is not None and resize_size is not None:
-        ground_truths['boxes'] = unnormalize_boxes(ground_truths['boxes'].clone(), orig_size, resize_size)
+    #print(f"\nVisualization Debug:")
+    #print(f"Image shape: {image.shape}")
+    #print(f"Original size: {orig_size}, Resize size: {resize_size}")
 
-
-
-    image = image_tensor.cpu().clone()
-    image = to_pil_image(image)
-    image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    # Create figure and axis
+    plt.figure(figsize=(12, 8))
+    plt.imshow(image)
 
     # Draw predicted boxes (green)
-    boxes = detections['boxes'].cpu()
-    scores = detections['scores'].cpu()
-    labels = detections['labels'].cpu()
+    if detections is not None:
+        pred_boxes = detections['boxes'].cpu().clone()
+        scores = detections['scores'].cpu()
+        labels = detections['labels'].cpu()
 
-    for box, score, label in zip(boxes, scores, labels):
-        x1, y1, x2, y2 = map(int, box.tolist())
-        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label_text = f"P: {label.item()} | {score:.2f}"
-        cv2.putText(image, label_text, (x1, y1 - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        #print(f"Pred boxes before scaling: {pred_boxes[:5]}")  # Print first 5 boxes
+        # Scale normalized coordinates to pixel coordinates
+        pred_boxes[:, [0, 2]] *= W  # scale x coordinates
+        pred_boxes[:, [1, 3]] *= H  # scale y coordinates
+        pred_boxes = pred_boxes.int()
+        #print(f"Pred boxes after scaling: {pred_boxes[:5]}")
 
-    # Draw ground truth boxes (red)
+        for box, score, label in zip(pred_boxes, scores, labels):
+            x1, y1, x2, y2 = box.tolist()
+            rect = plt.Rectangle((x1, y1), x2-x1, y2-y1, fill=False, color='g', linewidth=2)
+            plt.gca().add_patch(rect)
+            plt.text(x1, y1-5, f'P:{score:.2f}', color='g', fontsize=8, 
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+
+    # Draw ground truth boxes (blue)
     if ground_truths is not None:
-        gt_boxes = ground_truths['boxes'].cpu()
+        gt_boxes = ground_truths['boxes'].cpu().clone()
         gt_labels = ground_truths['labels'].cpu()
 
+        #print(f"GT boxes before scaling: {gt_boxes[:5]}")
+        # First unnormalize using original and resize dimensions
+        if orig_size is not None and resize_size is not None:
+            gt_boxes = unnormalize_boxes(gt_boxes, orig_size, resize_size)
+            #print(f"GT boxes after unnormalize: {gt_boxes[:5]}")
+        
+        # Then scale to current image dimensions
+        scale_x = W / resize_size[1]
+        scale_y = H / resize_size[0]
+        gt_boxes[:, [0, 2]] *= scale_x
+        gt_boxes[:, [1, 3]] *= scale_y
+        gt_boxes = gt_boxes.int()
+        #print(f"GT boxes after final scaling: {gt_boxes[:5]}")
+
         for box, label in zip(gt_boxes, gt_labels):
-            x1, y1, x2, y2 = map(int, box.tolist())
-            cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            label_text = f"GT: {label.item()}"
-            cv2.putText(image, label_text, (x1, y2 + 15), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+            x1, y1, x2, y2 = box.tolist()
+            rect = plt.Rectangle((x1, y1), x2-x1, y2-y1, fill=False, color='b', linewidth=2)
+            plt.gca().add_patch(rect)
+            plt.text(x1, y2+10, f'GT', color='b', fontsize=8,
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
 
-    # Convert back to RGB for display
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    plt.imshow(image)
-    plt.title(title)
-    plt.axis('off')
+    plt.title(f"{title}\nImage size: {W}x{H}, Orig: {orig_size}, Resize: {resize_size}")
+    plt.axis('on')  # Show axes to debug coordinate issues
 
     if save_path:
         plt.savefig(save_path, bbox_inches='tight', dpi=150)
         plt.close()
     else:
         plt.show()
+    plt.close()
 

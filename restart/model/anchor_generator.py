@@ -18,16 +18,16 @@ class AnchorGenerator:
     
     # Initialize Anchor Generator.
     def __init__(self,
-                 base_sizes: List[int] = [32, 64, 128, 256],  # Increased base sizes
-                 aspect_ratios: List[float] = [0.7, 1.0, 1.4],  # Focused ratios
-                 scales: List[float] = [0.75, 1.0]):  # Reduced scales
+                 base_sizes: List[int] = [32, 64, 128, 256, 512],  # Added larger base size
+                 aspect_ratios: List[float] = [0.5, 0.7, 1.0, 1.4, 2.0],  # More diverse ratios
+                 scales: List[float] = [0.5, 0.75, 1.0, 1.25]):  # More diverse scales
         """
         Initialize Anchor Generator with appropriate constraints.
         
         Args:
             base_sizes: Base anchor sizes for each feature pyramid level
-            aspect_ratios: Reduced set of width/height ratios
-            scales: Reduced set of scaling factors
+            aspect_ratios: Wider range of width/height ratios
+            scales: More diverse set of scaling factors
             min_size: Minimum allowed size relative to image (2%)
             max_size: Maximum allowed size relative to image (30%)
             center_sampling_radius: Radius for center sampling (relative to stride)

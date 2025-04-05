@@ -1,0 +1,51 @@
+# Training Configuration.
+
+# Used for full training.
+
+# Model Configuration.
+model:
+  pretrained_backbone: true   # Whether to Use Pretrained Backbone.
+  fpn_out_channels: 256       # Number of Output Channels for FPN.
+  num_classes: 3              # Number of Classes.
+  num_anchors: 3              # Number of Anchors.
+
+# Data Configuration
+data:
+  data_dir: "datasets/SKU-110K"
+  image_size: 640
+
+# Training Configuration.
+training:
+  image_size: 640            # Match command line image size
+  batch_size: 1              # Reduced batch size for memory efficiency
+  accumulate_grad_batches: 4  # Accumulate gradients to simulate batch_size=4
+  num_workers: 2             # Reduced worker count to save memory
+  learning_rate: 1e-5        # More conservative initial learning rate
+  weight_decay: 1e-4         # Weight decay for regularization
+  epochs: 20                 # Total epochs target
+  save_freq: 1               # Save every epoch
+  validate_freq: 1           # Validate every epoch
+  grad_clip: 1.0            # Gradient clipping threshold
+  save_dir: "checkpoints"   
+  use_wandb: false         
+  project_name: 'sku-detection'
+  verbose: true
+  checkpoint_keep_num: 5
+  optimizer_type: "adamw"
+  scheduler_type: "onecycle"
+  warmup_epochs: 2          # Warmup epochs
+  min_learning_rate: 1e-7   # Lower minimum learning rate
+  max_learning_rate: 5e-5   # Lower maximum learning rate
+  early_stopping_patience: 5 # Stop if no improvement
+  loss_weights:            # Balance loss components
+    cls_loss: 1.0
+    box_loss: 1.0
+  visualize: true
+  nms_threshold: 0.3
+  top_k: 100
+  vis_max_boxes: 100
+
+# Evaluation Parameters.
+evaluation:
+  conf_threshold: 0.5     # Lower initial confidence threshold
+  iou_threshold: 0.5

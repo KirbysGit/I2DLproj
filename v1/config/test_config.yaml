@@ -1,0 +1,34 @@
+# Test Configuration.
+
+# Used for testing model before full training.
+
+# Model Configuration.
+model:
+  pretrained_backbone: true     # Whether to Use Pretrained Backbone.
+  fpn_out_channels: 256         # Number of Output Channels for FPN.
+  num_classes: 1                # Number of Classes.
+  num_anchors: 6                # Number of Anchors.
+  verbose: true                 # Enable Debug Output.
+
+# Training Configuration.
+training:
+  batch_size: 2                       # Smaller Batch for Testing.
+  num_workers: 0                      # Set to 0 for Easier Debugging.
+  learning_rate: 0.0001               # Learning Rate.
+  weight_decay: 0.0001                # Weight Decay.
+  epochs: 2                           # Number of Epochs.
+  save_freq: 1                        # Save Frequency.
+  grad_clip: 1.0                      # Gradient Clipping.
+  save_dir: 'test_checkpoints'        # Save Directory.
+  use_wandb: false                    # Whether to Use Weights and Biases.
+  project_name: 'sku-detection-test'  # Project Name.
+  
+# Test Settings.
+test:
+  max_samples: 16                    # Even Smaller Dataset for Faster Testing.
+  verbose: true                      # More Detailed Output.
+  visualize: true                    # Enable Visualization.
+  visualize_features: true           # Enable Feature Map Visualization.
+  vis_threshold: 0.1                 # Lower Threshold to See More Predictions.
+  visualize_anchors: true            # Enable Anchor Visualization.
+  max_anchors_to_show: 50            # Number of Anchors to Visualize per Level

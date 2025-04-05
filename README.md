@@ -26,39 +26,88 @@ This project focuses on developing an object detection system for the SKU-110K d
 
 ## Project Structure
 ```
-project/
-├── src/                    # Source code
-│   ├── model/             # Model architecture and components
-│   ├── data/              # Data handling and processing
-│   ├── utils/             # Utility functions and helpers
-│   ├── training/          # Training components
-│   ├── config/            # Configuration files
-│   ├── train.py           # Main training script
-│   ├── evaluate.py        # Evaluation script
-│   ├── dataset_loader.py  # Dataset loading utilities
-│   └── run_tests.py       # Test runner
+i2dlproj/
+├── v1/                       # Legacy version (initial baseline implementation)
+│   ├── ...                   # Old source code and training pipeline
 │
-├── training_runs/         # Training run outputs and logs
-├── docs/                  # Documentation
-├── datasets/              # Dataset storage
-├── requirements.txt       # Project dependencies
-└── pytest.ini            # PyTest configuration
+├── restart/                 # Current implementation (modular, improved architecture)
+│   ├── model/               # Core model components: backbone, FPN, detection head, anchors
+│   │   ├── anchor_generator.py
+│   │   ├── backbone.py
+│   │   ├── detection_head.py
+│   │   ├── detector.py
+│   │   └── fpn.py
+│   │ 
+│   ├── data/                # Dataset loader and retail image preprocessing
+│   │   └── dataset.py
+│   │
+│   ├── utils/               # Helper functions for box operations and plotting
+│   │   ├── box_ops.py
+│   │   ├── plots.py
+│   │   └── visualize_detections.py
+│   │
+│   ├── train/               # Training loop and training logic
+│   │   └── trainer.py
+│   │
+│   ├── test/                # Unit tests for model components
+│   │   ├── test_anchor_coverage.py
+│   │   ├── test_anchor_generator.py
+│   │   ├── test_anchor_matching.py
+│   │   ├── test_box_iou.py
+│   │   ├── test_dataset.py
+│   │   ├── test_detection_head.py
+│   │   ├── test_detector.py
+│   │   ├── test_overfitting.py
+│   │   └── test_pipeline.py
+│   │
+│   ├── config/              # YAML configuration files for training/evaluation
+│   │   ├── testing_config.yaml
+│   │   └── training_config.yaml
+│   │
+│   ├── test.py              # Evaluation entry point for running tests
+│   └── compareSOTA.py       # Evaluation script for benchmarking against SOTA (YOLOv5)
+│
+├── training_runs/           # Saved training checkpoints, logs, and visualizations
+│   └── TR_{timestamp}/
+│       ├── checkpoints/
+│       ├── visualizations/
+│       └── training_loss.png
+│
+├── test_runs/               # Evaluation outputs for specific model runs
+│   └── eval_{model}_{timestamp}/
+│       ├── metrics/
+│       ├── visualizations/
+│       └── eval_config.yaml
+│
+├── comparison_results/      # YOLOv5 vs ShelfVision comparison outputs
+├── checkpoints/             # Manually saved model weights
+├── debug_output/            # Intermediate debug images and logs
+├── test_results/            # Unit test output and logs
+├── docs/                    # Project documentation, slides, and notes
+└── requirements.txt         # Python dependencies list
+
+
 ```
 
 The project follows a modular structure where:
-- `src/`: Contains all source code and implementation
-  - `model/`: Neural network architecture and components
-  - `data/`: Data processing and augmentation
-  - `utils/`: Helper functions and utilities
-  - `training/`: Training loop and optimization
-  - `config/`: Configuration files for different runs
-- `evaluation_results/`: Stores model evaluation metrics and visualizations
+- `restart/`: Contains all source code and modular implementation for the latest model version
+  - `model/`: Backbone, FPN, anchors, and detection logic
+  - `data/`: Dataset loading and preprocessing
+  - `utils/`: Visualization and box operations
+  - `train/`: Core training loop logic
+  - `test/`: Unit tests for model components
+  - `config/`: Config files for training and testing
+  - `compareSOTA.py` and `test.py`: Entry points for evaluation
+- `test_runs/`: Stores model evaluation results, metrics, and visualizations
+- `comparison_results/`: Output comparisons against YOLOv5 baseline models
 - `training_runs/`: Contains training logs and outputs
 - `debug_output/`: Debug visualizations and outputs
 - `test_results/`: Test execution outputs
 - `docs/`: Project documentation
-- `datasets/`: Location for dataset storage
 - `checkpoints/`: Saved model weights and states
+
+⚠️ **Legacy Note**: The `v1/` folder contains the original baseline version used in early development (Eval 1). 
+The `restart/` directory includes the updated model logic, modular pipeline, and improvements featured in Eval 2.
 
 ## Key Features
 
@@ -112,157 +161,106 @@ pip install -r requirements.txt
 
 ## Usage
 
+The project uses YAML configuration files to manage training and testing parameters. The main workflow involves:
+
+1. Adjusting the configuration files in `restart/config/`:
+   - `training_config.yaml`: Training parameters and model settings
+   - `testing_config.yaml`: Evaluation and testing parameters
+
+2. Running the training or testing scripts:
+
 ### Training
 ```bash
-python -m src.train --num-images 256 --batch-size 16 --epochs 20
+# Edit restart/config/training_config.yaml first to set your parameters
+python restart/train/trainer.py
 ```
 
-### Debug Mode
+### Testing/Evaluation
 ```bash
-python -m src.train --debug --num-images 32 --batch-size 4 --epochs 5 --debug-loss
+# Edit restart/config/testing_config.yaml first to set your parameters
+python restart/test.py
 ```
 
-## Running the Model
+## Configuration Files
 
-### Training Options
+### Training Configuration
+Key parameters in `restart/config/training_config.yaml`:
+```yaml
+# Model Parameters
+model:
+  backbone: "resnet50"
+  num_classes: 1
+  num_anchors: 9
+  pretrained: true
 
-1. **Standard Training**
-```bash
-python -m src.train \
-    --epochs 20 \
-    --batch-size 8 \
-    --image-size 640 \
-    --learning-rate 0.001 \
-    --save-freq 5
+# Training Parameters
+training:
+  batch_size: 16
+  num_epochs: 20
+  learning_rate: 0.001
+  save_freq: 5
+  num_workers: 4
+
+# Dataset Parameters
+dataset:
+  image_size: [640, 640]
+  train_split: 0.8
+  augmentation: true
+
+# Output Settings
+output_dir: "training_runs"
+checkpoint_dir: "checkpoints"
 ```
 
-2. **Training with Specific Configuration**
-```bash
-python -m src.train \
-    --config configs/train_config.yaml \
-    --run-name custom_run_1 \
-    --resume-from checkpoints/latest.pth
+### Testing Configuration
+Key parameters in `restart/config/testing_config.yaml`:
+```yaml
+# Model Parameters
+checkpoint_path: "checkpoints/best_model.pth"
+confidence_threshold: 0.5
+nms_threshold: 0.3
+
+# Evaluation Parameters
+num_images: 100
+batch_size: 16
+visualize: true
+
+# Output Settings
+output_dir: "test_runs"
 ```
-
-3. **Debug Training**
-```bash
-python -m src.train \
-    --debug \
-    --num-images 32 \
-    --batch-size 4 \
-    --epochs 5 \
-    --verbose \
-    --debug-loss
-```
-
-4. **Distributed Training**
-```bash
-python -m torch.distributed.launch \
-    --nproc_per_node=2 \
-    src/train.py \
-    --distributed \
-    --batch-size 16 \
-    --epochs 20
-```
-
-### Evaluation Options
-
-1. **Quick Test**
-```bash
-python -m src.evaluate \
-    --debug \
-    --num-images 10 \
-    --confidence-threshold 0.15 \
-    --nms-threshold 0.3
-```
-
-2. **Standard Evaluation**
-```bash
-python -m src.evaluate \
-    --checkpoint checkpoints/best_model.pth \
-    --num-images 100 \
-    --confidence-threshold 0.5 \
-    --nms-threshold 0.3
-```
-
-3. **Benchmark Evaluation**
-```bash
-python -m src.evaluate \
-    --benchmark \
-    --full-dataset \
-    --batch-size 16 \
-    --no-visualization
-```
-
-4. **Custom Evaluation**
-```bash
-python -m src.evaluate \
-    --checkpoint checkpoints/custom.pth \
-    --image-dir custom_images/ \
-    --output-dir results/ \
-    --save-visualizations
-```
-
-### Key Parameters
-
-#### Training Parameters
-- `--epochs`: Number of training epochs
-- `--batch-size`: Batch size for training
-- `--image-size`: Input image size
-- `--learning-rate`: Initial learning rate
-- `--save-freq`: Checkpoint saving frequency
-- `--resume-from`: Path to checkpoint to resume from
-- `--run-name`: Custom name for the training run
-- `--debug`: Enable debug mode
-- `--verbose`: Enable verbose logging
-
-#### Evaluation Parameters
-- `--checkpoint`: Path to model checkpoint
-- `--num-images`: Number of images to evaluate
-- `--confidence-threshold`: Detection confidence threshold
-- `--nms-threshold`: Non-maximum suppression threshold
-- `--visualize`: Enable result visualization
-- `--save-visualizations`: Save visualization results
-- `--output-dir`: Directory to save results
 
 ### Example Workflows
 
-1. **Complete Training Pipeline**
+1. **Training Pipeline**
 ```bash
-# 1. Start with debug training
-python -m src.train --debug --num-images 32 --batch-size 4 --epochs 2
+# 1. Edit training configuration
+vim restart/config/training_config.yaml
 
-# 2. Run full training
-python -m src.train --epochs 20 --batch-size 8 --image-size 640
+# 2. Run training
+python restart/train/trainer.py
 
-# 3. Evaluate the model
-python -m src.evaluate --checkpoint checkpoints/best_model.pth --num-images 100
+# 3. Edit testing configuration
+vim restart/config/testing_config.yaml
+
+# 4. Run evaluation
+python restart/test.py
 ```
 
-2. **Experimental Setup**
+2. **Evaluation Only**
 ```bash
-# 1. Train with custom configuration
-python -m src.train --config configs/experimental.yaml --run-name exp1
+# 1. Edit testing configuration to point to your model checkpoint
+vim restart/config/testing_config.yaml
 
-# 2. Debug evaluation
-python -m src.evaluate --debug --num-images 10 --visualize
-
-# 3. Full evaluation
-python -m src.evaluate --full-dataset --batch-size 16
+# 2. Run evaluation
+python restart/test.py
 ```
 
 ### Monitoring and Visualization
 
 - Training metrics are saved in `training_runs/<run_name>/`
-- Visualizations are saved in `debug_output/` when using `--debug` mode
-- Evaluation results are saved in `results/` directory
+- Visualizations are saved in `debug_output/` when debug mode is enabled in config
+- Evaluation results are saved in `test_runs/` directory
 - Use TensorBoard for real-time monitoring:
 ```bash
 tensorboard --logdir training_runs/
 ```
-
-## Current Challenges
-
-1. **Dense Object Detection**: Handling tightly packed products with significant overlap.
-2. **Training Efficiency**: Balancing model capacity with training speed.
-3. **Memory Usage**: Managing large number of anchor boxes efficiently.

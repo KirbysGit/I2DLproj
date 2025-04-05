@@ -1,0 +1,26 @@
+# === PATHS ===
+dataset_path: datasets/SKU-110K
+checkpoint_path: training_runs\TR_20250405_001051\checkpoints\model_epoch_15.pt
+
+# === IMAGE & BATCH CONFIG ===
+resize_dims: [416, 416]
+batch_size: 1
+subset_size: 100  # Number of images to test on
+
+# === EVALUATION PARAMETERS ===
+iou_threshold: 0.3
+confidence_threshold: 0.35
+nms_threshold: 0.45
+
+# === VISUALIZATION ===
+num_visualizations: 10
+output_dir: test_runs
+visualization_dir: visualizations
+
+# === METRICS TRACKING ===
+save_per_image_metrics: true
+track_confidence_thresholds: true
+confidence_range: [0.1, 0.9, 9]  # start, end, num_points
+
+# === DEVICE ===
+device: "cuda"
