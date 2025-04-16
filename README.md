@@ -1,28 +1,123 @@
 # Retail Product Detection Model
 
-A PyTorch-based object detection framework specifically designed for detecting retail products in densely packed shelf images. This project implements a custom object detection model with features tailored for retail environments.
+A PyTorch-based object detection framework specifically designed for detecting retail products in densely packed shelf images, developed for the Introduction to Deep Learning course.
 
-## Project Overview
+## Dataset
 
-This project focuses on developing an object detection system for the SKU-110K dataset, which contains challenging retail shelf images with densely packed products. Our model is designed to handle:
-- Dense object detection scenarios
-- Multiple objects with similar appearances
-- Varying scales of products
-- Overlapping items
+The project uses the SKU-110K dataset, which contains retail shelf images with densely packed products. We provide two versions of the dataset via UCF OneDrive:
 
-### Current Development Status
+1. **Complete Dataset** (~30GB):
+   **[Download Full SKU-110K Dataset](https://github.com/eg4000/SKU110K_CVPR19?tab=readme-ov-file)**
+   - Training: 8,233 images
+   - Validation: 588 images
+   - Test: 2,941 images
 
-✅ Completed:
-- Basic model architecture implementation
-- Anchor generation and matching system
-- Loss functions (classification and box regression)
-- Training pipeline with validation
-- Initial data loading and augmentation
+2. **Small Dataset** (~4GB):
+   **[Download Small SKU-110K Dataset](https://ucf-my.sharepoint.com/:u:/r/personal/co201115_ucf_edu/Documents/SKU-110K-Small.zip?csf=1&web=1&e=tzKZGI)**
+   - Training: 1,000 images
+   - Validation: 200 images
+   - Test: 100 images
+   - Perfect for quick experimentation and development
 
-🔄 In Progress:
-- Improving model performance on dense object scenarios
-- Enhancing visualization tools
-- Documentation and code organization
+### Creating Your Own Small Dataset
+If you have the full dataset, you can create your own small version:
+
+```bash
+# Create small dataset from full dataset
+python restart/utils/create_small_dataset.py
+
+# Optional: Customize the size
+python restart/utils/create_small_dataset.py --train 500 --val 100 --test 50
+```
+
+This will create a new directory `datasets/SKU-110K-Small` with the reduced dataset.
+
+### Dataset Structure
+After downloading and extracting the dataset, organize it as follows:
+```
+datasets/
+├── SKU-110K/
+│   ├── images/
+│   │   ├── train/          # Training images
+│   │   ├── val/            # Validation images
+│   │   └── test/           # Test images
+│   └── annotations/
+│       ├── annotations_train.csv
+│       ├── annotations_val.csv
+│       └── annotations_test.csv
+└── sample_test/            # Sample images for quick testing
+```
+
+### Annotation Format
+The CSV files contain the following columns:
+```
+image_name, x1, y1, x2, y2, class, image_width, image_height
+```
+Where:
+- `image_name`: Name of the image file
+- `x1, y1`: Top-left corner coordinates
+- `x2, y2`: Bottom-right corner coordinates
+- `class`: Always 1 (single class detection)
+- `image_width, image_height`: Original image dimensions
+
+### Quick Start with Sample Data
+For quick testing without downloading the full dataset:
+1. A small sample dataset is included in the repository under `datasets/sample_test/`
+2. Contains 10 test images with annotations
+3. Useful for testing the inference pipeline
+
+### Setting Up the Dataset
+1. Download the zip file from the OneDrive link above
+2. Extract the contents to your project directory:
+```bash
+# Create dataset directory
+mkdir -p datasets/SKU-110K
+
+# Extract dataset
+unzip SKU-110K_Dataset.zip -d datasets/SKU-110K
+
+# Verify structure
+tree datasets/SKU-110K -L 2
+```
+
+3. Verify the installation:
+```bash
+python restart/test/test_dataset.py
+```
+This will run basic checks to ensure the dataset is properly organized and readable.
+
+## Process For Installation
+
+## Setup Instructions
+
+1. Clone the repository:
+```bash
+git clone https://github.com/KirbysGit/I2DLproj.git
+cd retail-detection
+```
+
+2. Create and activate a virtual environment:
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate (Windows)
+.\venv\Scripts\activate
+
+# Activate (Linux/Mac)
+source venv/bin/activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Download the dataset:
+   - Download from the provided OneDrive link
+   - Extract to `datasets/SKU-110K/`
+   - Ensure the following structure:
+```
 
 ## Project Structure
 ```
@@ -109,158 +204,40 @@ The project follows a modular structure where:
 ⚠️ **Legacy Note**: The `v1/` folder contains the original baseline version used in early development (Eval 1). 
 The `restart/` directory includes the updated model logic, modular pipeline, and improvements featured in Eval 2.
 
-## Key Features
 
-### Model Architecture
-- Feature Pyramid Network (FPN) backbone
-- Multi-scale detection heads
-- Anchor-based detection system
-- Binary classification (object vs. background)
-
-### Training Features
-- Batch-based training with validation
-- IoU-based anchor matching
-- Smooth L1 loss for box regression
-- Binary Cross Entropy for classification
-- Learning rate scheduling
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone <repository_url>
-cd retail-detection
-```
-
-2. Create and activate a virtual environment:
-
-For Windows:
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-.\venv\Scripts\activate
-```
-
-For Linux/Mac:
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-source venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Download the SKU-110K dataset and place it in the `datasets` directory.
-
-## Usage
-
-The project uses YAML configuration files to manage training and testing parameters. The main workflow involves:
-
-1. Adjusting the configuration files in `restart/config/`:
-   - `training_config.yaml`: Training parameters and model settings
-   - `testing_config.yaml`: Evaluation and testing parameters
-
-2. Running the training or testing scripts:
+## Running the Code
 
 ### Training
+1. Configure training parameters:
 ```bash
-# Edit restart/config/training_config.yaml first to set your parameters
-python restart/train/trainer.py
-```
-
-### Testing/Evaluation
-```bash
-# Edit restart/config/testing_config.yaml first to set your parameters
-python restart/test.py
-```
-
-## Configuration Files
-
-### Training Configuration
-Key parameters in `restart/config/training_config.yaml`:
-```yaml
-# Model Parameters
-model:
-  backbone: "resnet50"
-  num_classes: 1
-  num_anchors: 9
-  pretrained: true
-
-# Training Parameters
-training:
-  batch_size: 16
-  num_epochs: 20
-  learning_rate: 0.001
-  save_freq: 5
-  num_workers: 4
-
-# Dataset Parameters
-dataset:
-  image_size: [640, 640]
-  train_split: 0.8
-  augmentation: true
-
-# Output Settings
-output_dir: "training_runs"
-checkpoint_dir: "checkpoints"
-```
-
-### Testing Configuration
-Key parameters in `restart/config/testing_config.yaml`:
-```yaml
-# Model Parameters
-checkpoint_path: "checkpoints/best_model.pth"
-confidence_threshold: 0.5
-nms_threshold: 0.3
-
-# Evaluation Parameters
-num_images: 100
-batch_size: 16
-visualize: true
-
-# Output Settings
-output_dir: "test_runs"
-```
-
-### Example Workflows
-
-1. **Training Pipeline**
-```bash
-# 1. Edit training configuration
+# Edit training configuration
 vim restart/config/training_config.yaml
+```
 
-# 2. Run training
+2. Start training:
+```bash
 python restart/train/trainer.py
+```
 
-# 3. Edit testing configuration
+Training outputs will be saved to `training_runs/TR_{timestamp}/`:
+- Model checkpoints in `checkpoints/`
+- Training visualizations in `visualizations/`
+- Loss plots and metrics in root directory
+
+### Evaluation
+1. Configure evaluation parameters:
+```bash
+# Edit testing configuration
 vim restart/config/testing_config.yaml
+```
 
-# 4. Run evaluation
+2. Run evaluation:
+```bash
 python restart/test.py
 ```
 
-2. **Evaluation Only**
-```bash
-# 1. Edit testing configuration to point to your model checkpoint
-vim restart/config/testing_config.yaml
-
-# 2. Run evaluation
-python restart/test.py
-```
-
-### Monitoring and Visualization
-
-- Training metrics are saved in `training_runs/<run_name>/`
-- Visualizations are saved in `debug_output/` when debug mode is enabled in config
-- Evaluation results are saved in `test_runs/` directory
-- Use TensorBoard for real-time monitoring:
-```bash
-tensorboard --logdir training_runs/
-```
+Evaluation outputs will be saved to `test_runs/eval_{model}_{timestamp}/`:
+- Detection visualizations
+- Precision-recall curves
+- IoU histograms
+- Detailed metrics summary

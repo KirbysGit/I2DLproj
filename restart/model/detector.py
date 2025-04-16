@@ -63,7 +63,7 @@ class ObjectDetector(nn.Module):
         )
         
         # More lenient thresholds
-        self.conf_thresh = 0.2    # Lower confidence threshold
+        self.conf_thresh = 0.4    # Lower confidence threshold
         self.nms_thresh = 0.5     # More permissive NMS
         self.max_predictions = 300 # Allow more predictions
         self.score_threshold = 0.2 # Lower score threshold
